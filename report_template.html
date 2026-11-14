@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<title>セクター別テクニカル総合スコア</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --ink: #1d2330; --sub: #6b7280; --line: #e5e7eb;
+    --accent: #1f4e79;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+    font-size: 14px; line-height: 1.45; -webkit-text-size-adjust: 100%;
+  }
+  header { padding: 16px 16px 8px; padding-top: max(16px, env(safe-area-inset-top)); }
+  h1 { font-size: 19px; margin: 0 0 4px; letter-spacing: .02em; }
+  .meta { color: var(--sub); font-size: 12px; }
+  nav {
+    position: sticky; top: 0; z-index: 20; background: var(--bg);
+    display: flex; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--line);
+  }
+  nav button {
+    flex: 1; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    padding: 9px 4px; border-radius: 10px; font-size: 14px; font-weight: 600; font-family: inherit;
+  }
+  nav button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  main { padding: 12px 12px 32px; max-width: 1100px; margin: 0 auto; }
+  section { display: none; }
+  section.on { display: block; }
+  .card { background: var(--card); border-radius: 14px; padding: 12px; margin-bottom: 12px;
+          box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  .card h2 { font-size: 15px; margin: 0 0 8px; }
+  .note { color: var(--sub); font-size: 12px; margin: 8px 2px 0; }
+
+  /* 表（横スクロール＋先頭列固定） */
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 10px; }
+  table { border-collapse: separate; border-spacing: 2px; width: 100%; }
+  th, td { white-space: nowrap; text-align: center; padding: 8px 6px; border-radius: 6px; font-size: 13px; }
+  thead th { color: var(--sub); font-weight: 600; font-size: 11px; line-height: 1.25; background: var(--card); }
+  th.name, td.name {
+    position: sticky; left: 0; z-index: 2; background: var(--card);
+    text-align: left; font-weight: 600; min-width: 84px; max-width: 104px; font-size: 12px;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  td.total { font-weight: 700; font-size: 14px; min-width: 52px; }
+  tbody tr.click { cursor: pointer; }
+  tbody tr.click:active td { filter: brightness(.95); }
+
+  /* 推移ヒートマップ */
+  table.hist { border-spacing: 1px; width: auto; }
+  table.hist td.c { width: 11px; min-width: 11px; height: 26px; padding: 0; border-radius: 2px; }
+  table.hist thead th { font-size: 10px; padding: 0; height: 16px; font-weight: 500; position: relative; }
+  table.hist thead th span { position: absolute; right: 0; bottom: 2px; white-space: nowrap; }
+  th.name, td.name { box-shadow: -3px 0 0 var(--card), 3px 0 0 var(--card); }
+  #histInfo { min-height: 20px; font-size: 13px; font-weight: 600; margin: 4px 2px 8px; }
+
+  /* 凡例 */
+  .legend { display: flex; gap: 4px; align-items: center; font-size: 11px; color: var(--sub); margin-top: 8px; flex-wrap: wrap; }
+  .legend span.sw { display: inline-block; width: 26px; height: 14px; border-radius: 3px; }
+
+  /* 上位・下位 */
+  .tops { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tops div { font-size: 13px; }
+  .tops b { display: block; font-size: 12px; color: var(--sub); margin-bottom: 2px; }
+
+  select { width: 100%; font-size: 16px; padding: 10px; border-radius: 10px; border: 1px solid var(--line);
+           background: var(--card); font-family: inherit; color: var(--ink); }
+  #chart { width: 100%; height: 520px; }
+  footer { color: var(--sub); font-size: 11px; text-align: center; padding: 0 16px 24px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>セクター別テクニカル総合スコア</h1>
+  <div class="meta" id="meta"></div>
+</header>
+<nav>
+  <button data-tab="today" class="on">今日</button>
+  <button data-tab="history">推移</button>
+  <button data-tab="detail">詳細</button>
+</nav>
+<main>
+  <section id="today" class="on">
+    <div class="card tops" id="tops"></div>
+    <div class="card">
+      <div class="scroll"><table id="sigTable"></table></div>
+      <div class="legend" id="legend1"></div>
+      <p class="note">色＝点数、文字＝実際の数値。表は横にスクロールできます。行をタップすると詳細を表示します。<br>
+        サイコロ：直近12日の勝敗／出来高：売買代金の20日平均比と当日の向き／MACD：GC・DCはクロス、%はヒストグラムの株価比／
+        ローソク足：パターン名か実体の大きさ／移動平均：25日線と75日線の位置・向き・25日線乖離率</p>
+    </div>
+  </section>
+
+  <section id="history">
+    <div class="card">
+      <h2>総合スコアの推移</h2>
+      <div id="histInfo">マスをタップすると数値を表示</div>
+      <div class="scroll"><table class="hist" id="histTable"></table></div>
+      <div class="legend" id="legend2"></div>
+      <p class="note">右端が最新日。赤→緑に変わったところが、買いシグナルが強まったタイミングです。</p>
+    </div>
+  </section>
+
+  <section id="detail">
+    <div class="card"><select id="sectorSel"></select></div>
+    <div class="card"><div id="chart"></div></div>
+    <div class="card">
+      <h2>直近10日の内訳</h2>
+      <div class="scroll"><table id="last10"></table></div>
+    </div>
+  </section>
+</main>
+<footer>※ テクニカル指標による参考情報です。投資判断はご自身の責任で行ってください。</footer>
+
+<script>
+const D = /*__DATA__*/null;
+
+// ---- 色 ----
+const STOPS = [[-2, "#c0392b"], [-1, "#f1948a"], [0, "#f2f3f5"], [1, "#82e0aa"], [2, "#1e8449"]];
+function hex2rgb(h) { return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); }
+function colorFor(v) {               // v: -2〜+2（連続値OK）
+  if (v === null || v === undefined) return { bg: "#fafafa", fg: "#9ca3af" };
+  v = Math.max(-2, Math.min(2, v));
+  let i = 0; while (i < STOPS.length - 2 && v > STOPS[i + 1][0]) i++;
+  const [a, ca] = STOPS[i], [b, cb] = STOPS[i + 1];
+  const t = (v - a) / (b - a), A = hex2rgb(ca), B = hex2rgb(cb);
+  const rgb = A.map((x, k) => Math.round(x + (B[k] - x) * t));
+  const lum = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]);
+  return { bg: `rgb(${rgb.join(",")})`, fg: lum < 140 ? "#fff" : "#1d2330" };
+}
+const fmt = v => (v === null || v === undefined) ? "-" : (v > 0 ? "+" : "") + (v + 0).toFixed(0);
+function cell(text, score, cls = "") {
+  const c = colorFor(score);
+  return `<td class="${cls}" style="background:${c.bg};color:${c.fg}">${text || "-"}</td>`;
+}
+const HEAD = { "サイコロ": "サイコロ<br>12日勝敗", "出来高": "出来高<br>20日比", "MACD": "MACD",
+               "ローソク足": "ローソク足", "移動平均": "移動平均<br>25日乖離" };
+function legend(el, labels) {
+  el.innerHTML = labels.map(([v, l]) => {
+    const c = colorFor(v); return `<span class="sw" style="background:${c.bg}"></span>${l}`;
+  }).join("&nbsp;");
+}
+
+// ---- タブ ----
+document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
+function showTab(id) {
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === id));
+  document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id === id));
+  window.scrollTo({ top: 0 });
+  if (id === "detail") drawChart();
+}
+
+// ---- 今日 ----
+function renderToday() {
+  const ind = D.indicators;
+  let h = `<thead><tr><th class="name">セクター</th><th>総合</th>${ind.map(k => `<th>${HEAD[k] || k}</th>`).join("")}</tr></thead><tbody>`;
+  for (const r of D.today) {
+    h += `<tr class="click" data-name="${r.name}"><td class="name">${r.name}</td>`
+      + cell(fmt(r.total), r.total === null ? null : r.total / 50, "total")
+      + ind.map(k => cell(r.texts[k], r.scores[k])).join("") + "</tr>";
+  }
+  document.getElementById("sigTable").innerHTML = h + "</tbody>";
+  document.querySelectorAll("#sigTable tr.click").forEach(tr =>
+    tr.addEventListener("click", () => { sel.value = tr.dataset.name; showTab("detail"); }));
+
+  const top = D.today.slice(0, 3), bottom = D.today.slice(-3).reverse();
+  const line = r => `${r.name}（${fmt(r.total)}）`;
+  document.getElementById("tops").innerHTML =
+    `<div><b>買い寄り上位</b>${top.map(line).join("<br>")}</div>` +
+    `<div><b>売り寄り上位</b>${bottom.map(line).join("<br>")}</div>`;
+  legend(document.getElementById("legend1"), [[-2, "−2"], [-1, "−1"], [0, "0"], [1, "+1"], [2, "+2"]]);
+}
+
+// ---- 推移 ----
+function renderHistory() {
+  const H = D.history, n = H.dates.length;
+  let h = `<thead><tr><th class="name"></th>${H.dates.map((d, i) =>
+    `<th>${(i === n - 1 || (n - 1 - i) % 10 === 0) ? `<span>${d.replace(/^0/, "")}</span>` : ""}</th>`).join("")}</tr></thead><tbody>`;
+  for (const r of H.rows) {
+    h += `<tr><td class="name">${r.name}</td>` + r.values.map((v, i) => {
+      const c = colorFor(v === null ? null : v / 50);
+      return `<td class="c" data-i="${i}" data-n="${r.name}" style="background:${c.bg}"></td>`;
+    }).join("") + "</tr>";
+  }
+  const t = document.getElementById("histTable");
+  t.innerHTML = h + "</tbody>";
+  t.addEventListener("click", e => {
+    const td = e.target.closest("td.c"); if (!td) return;
+    const row = H.rows.find(r => r.name === td.dataset.n), i = +td.dataset.i;
+    document.getElementById("histInfo").textContent = `${td.dataset.n}｜${H.dates[i]}：総合 ${fmt(row.values[i])}`;
+  });
+  // 最新日が見えるよう右端までスクロール
+  requestAnimationFrame(() => { const s = t.parentElement; s.scrollLeft = s.scrollWidth; });
+  legend(document.getElementById("legend2"), [[-2, "−100"], [-1, "−50"], [0, "0"], [1, "+50"], [2, "+100"]]);
+}
+
+// ---- 詳細 ----
+const sel = document.getElementById("sectorSel");
+function renderDetailSelect() {
+  sel.innerHTML = D.today.map(r => `<option value="${r.name}">${r.name}（総合 ${fmt(r.total)}）</option>`).join("");
+  sel.addEventListener("change", drawChart);
+}
+function drawChart() {
+  const S = D.detail[sel.value]; if (!S) return;
+  // 内訳表
+  const ind = D.indicators;
+  let h = `<thead><tr><th class="name">日付</th><th>総合</th>${ind.map(k => `<th>${HEAD[k] || k}</th>`).join("")}</tr></thead><tbody>`;
+  for (const r of S.last10) {
+    h += `<tr><td class="name">${r.date}</td>` + cell(fmt(r.total), r.total === null ? null : r.total / 50, "total")
+      + ind.map(k => cell(r.texts[k], r.scores[k])).join("") + "</tr>";
+  }
+  document.getElementById("last10").innerHTML = h + "</tbody>";
+
+  const el = document.getElementById("chart");
+  if (typeof Plotly === "undefined") {
+    el.innerHTML = '<p class="note">チャートの読み込み中です（オフラインでは表示されません）。</p>';
+    setTimeout(() => { if (typeof Plotly !== "undefined") drawChart(); }, 1500);
+    return;
+  }
+  const x = S.dates;
+  const traces = [
+    { type: "candlestick", x, open: S.o, high: S.h, low: S.l, close: S.c, name: "価格",
+      increasing: { line: { color: "#c0392b" } }, decreasing: { line: { color: "#1f618d" } }, yaxis: "y" },
+    { type: "scatter", x, y: S.ma25, name: "25日線", line: { width: 1.2, color: "#7d3c98" }, yaxis: "y" },
+    { type: "scatter", x, y: S.ma75, name: "75日線", line: { width: 1.2, color: "#ca6f1e" }, yaxis: "y" },
+    { type: "bar", x, y: S.turnover, name: "売買代金(億円)", marker: { color: "#aab2b5" }, yaxis: "y2" },
+    { type: "bar", x, y: S.hist, name: "MACDヒスト", yaxis: "y3",
+      marker: { color: S.hist.map(v => v > 0 ? "#1e8449" : "#c0392b") } },
+    { type: "scatter", x, y: S.macd, name: "MACD", line: { width: 1, color: "#2874a6" }, yaxis: "y3" },
+    { type: "scatter", x, y: S.signal, name: "シグナル", line: { width: 1, color: "#ca6f1e" }, yaxis: "y3" },
+  ];
+  const layout = {
+    margin: { l: 40, r: 8, t: 8, b: 24 }, showlegend: false, dragmode: false,
+    paper_bgcolor: "#fff", plot_bgcolor: "#fff", font: { size: 10 },
+    xaxis: { rangeslider: { visible: false }, rangebreaks: [{ bounds: ["sat", "mon"] }], anchor: "y3" },
+    yaxis: { domain: [0.42, 1] }, yaxis2: { domain: [0.24, 0.39] }, yaxis3: { domain: [0, 0.21] },
+  };
+  Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: false });
+}
+
+// ---- 起動 ----
+if (!D) {
+  document.querySelector("main").innerHTML = '<div class="card">データが入っていません。make_html.py で作成してください。</div>';
+} else {
+  document.getElementById("meta").textContent = `${D.region}｜基準日 ${D.asOf}｜更新 ${D.generated}`;
+  renderToday(); renderHistory(); renderDetailSelect();
+}
+</script>
+</body>
+</html>
