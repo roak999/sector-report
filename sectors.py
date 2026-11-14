@@ -25,8 +25,26 @@ JAPAN_17 = {
     "不動産":             {"price_ticker": "1633.T", "members": ["8801.T", "8802.T", "8830.T"]},
 }
 
+# 主要指数。指数には「構成銘柄の売買代金」が無いので、Yahooの出来高（株数）をそのまま使う。
+# 出来高が配信されない指数（DAX・SENSEXなど）は、出来高の採点を自動的に外して総合スコアを出す。
+INDICES = {
+    "日経平均":          {"price_ticker": "^N225",  "members": [], "volume": "shares"},
+    "TOPIX（ETF 1306）": {"price_ticker": "1306.T", "members": [], "volume": "turnover"},
+    "NYダウ":            {"price_ticker": "^DJI",   "members": [], "volume": "shares"},
+    "ナスダック総合":    {"price_ticker": "^IXIC",  "members": [], "volume": "shares"},
+    "S&P500":            {"price_ticker": "^GSPC",  "members": [], "volume": "shares"},
+    "DAX（ドイツ）":     {"price_ticker": "^GDAXI", "members": [], "volume": "shares"},
+    "SENSEX（インド）":  {"price_ticker": "^BSESN", "members": [], "volume": "shares"},
+}
+
+# 画面での並び順。sort=False のグループはスコア順に並べ替えず、上の定義順のまま表示する
+GROUP_OPTIONS = {
+    "主要指数": {"sort": False},
+}
+
 REGIONS = {
     "日本（TOPIX-17業種）": JAPAN_17,
+    "主要指数": INDICES,
     # 次のステップで追加:
     # "米国（SPDRセクター）": US_11,
     # "新興国（国別ETF）": EMERGING,

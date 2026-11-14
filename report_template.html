@@ -57,7 +57,7 @@
   table.hist thead th { font-size: 10px; padding: 0; height: 16px; font-weight: 500; position: relative; }
   table.hist thead th span { position: absolute; right: 0; bottom: 2px; white-space: nowrap; }
   th.name, td.name { box-shadow: -3px 0 0 var(--card), 3px 0 0 var(--card); }
-  #histInfo { min-height: 20px; font-size: 13px; font-weight: 600; margin: 4px 2px 8px; }
+    .histInfo { min-height: 20px; font-size: 13px; font-weight: 600; margin: 4px 2px 8px; }
 
   /* 凡例 */
   .legend { display: flex; gap: 4px; align-items: center; font-size: 11px; color: var(--sub); margin-top: 8px; flex-wrap: wrap; }
@@ -72,6 +72,21 @@
            background: var(--card); font-family: inherit; color: var(--ink); }
   #chart { width: 100%; height: 520px; }
   footer { color: var(--sub); font-size: 11px; text-align: center; padding: 0 16px 24px; }
+  td.name small { display: block; font-weight: 400; font-size: 10px; color: var(--sub); }
+  td.tip, th.tip { cursor: help; }
+  th.tip .q { display: inline-block; width: 14px; height: 14px; line-height: 14px; border-radius: 50%;
+              background: var(--accent); color: #fff; font-size: 10px; margin-left: 2px; }
+  td.tip { text-decoration: underline dotted rgba(0,0,0,.35); text-underline-offset: 3px; }
+  #tip {
+    position: fixed; z-index: 50; display: none; max-width: 300px;
+    background: #1d2330; color: #fff; padding: 10px 12px; border-radius: 10px;
+    font-size: 13px; line-height: 1.55; box-shadow: 0 6px 20px rgba(0,0,0,.25); pointer-events: none;
+  }
+  #tip b { display: block; font-size: 14px; margin-bottom: 2px; }
+  @media (hover: none) {           /* スマホ：画面下にシートとして出す */
+    #tip { left: 12px !important; right: 12px; bottom: max(16px, env(safe-area-inset-bottom)); top: auto !important;
+           max-width: none; pointer-events: auto; }
+  }
 </style>
 </head>
 <body>
@@ -85,36 +100,28 @@
   <button data-tab="detail">詳細</button>
 </nav>
 <main>
-  <section id="today" class="on">
-    <div class="card tops" id="tops"></div>
-    <div class="card">
-      <div class="scroll"><table id="sigTable"></table></div>
-      <div class="legend" id="legend1"></div>
-      <p class="note">色＝点数、文字＝実際の数値。表は横にスクロールできます。行をタップすると詳細を表示します。<br>
-        サイコロ：直近12日の勝敗／出来高：売買代金の20日平均比と当日の向き／MACD：GC・DCはクロス、%はヒストグラムの株価比／
-        ローソク足：パターン名か実体の大きさ／移動平均：25日線と75日線の位置・向き・25日線乖離率</p>
-    </div>
+  <section id="today" class="on"><div id="todayGroups"></div>
+    <p class="note">色＝点数、文字＝実際の数値。表は横にスクロールできます。名前をタップすると詳細を表示します。
+      ローソク足の欄は、PCではカーソルを当てると、スマホではタップすると説明が出ます。<br>
+      サイコロ：直近12日の勝敗／出来高：20日平均比と当日の向き／MACD：GC・DCはクロス、%はヒストグラムの株価比／
+      移動平均：25日線と75日線の位置・向き・25日線乖離率</p>
   </section>
 
-  <section id="history">
-    <div class="card">
-      <h2>総合スコアの推移</h2>
-      <div id="histInfo">マスをタップすると数値を表示</div>
-      <div class="scroll"><table class="hist" id="histTable"></table></div>
-      <div class="legend" id="legend2"></div>
-      <p class="note">右端が最新日。赤→緑に変わったところが、買いシグナルが強まったタイミングです。</p>
-    </div>
+  <section id="history"><div id="historyGroups"></div>
+    <p class="note">右端が最新日。赤→緑に変わったところが、買いシグナルが強まったタイミングです。空白は休場日です。</p>
   </section>
 
   <section id="detail">
     <div class="card"><select id="sectorSel"></select></div>
-    <div class="card"><div id="chart"></div></div>
+    <div class="card"><div id="chart"></div>
+      <p class="note">チャートに触れる（PCはカーソルを当てる）と、その日の値段とローソク足の説明が出ます。陽線＝赤、陰線＝青。</p></div>
     <div class="card">
       <h2>直近10日の内訳</h2>
       <div class="scroll"><table id="last10"></table></div>
     </div>
   </section>
 </main>
+<div id="tip"></div>
 <footer>※ テクニカル指標による参考情報です。投資判断はご自身の責任で行ってください。</footer>
 
 <script>
@@ -134,21 +141,66 @@ function colorFor(v) {               // v: -2〜+2（連続値OK）
   return { bg: `rgb(${rgb.join(",")})`, fg: lum < 140 ? "#fff" : "#1d2330" };
 }
 const fmt = v => (v === null || v === undefined) ? "-" : (v > 0 ? "+" : "") + (v + 0).toFixed(0);
-function cell(text, score, cls = "") {
+const esc = t => String(t ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---- ローソク足の説明 ----
+function candleHelp(text) {
+  if (!text) return null;
+  for (const k of Object.keys(D.candleHelp)) if (text.startsWith(k)) return { t: k, b: D.candleHelp[k] };
+  return null;
+}
+function cell(text, score, cls = "", key = "") {
   const c = colorFor(score);
-  return `<td class="${cls}" style="background:${c.bg};color:${c.fg}">${text || "-"}</td>`;
+  let attr = "";
+  if (key === "ローソク足") {
+    const h = candleHelp(text);
+    if (h) { cls += " tip"; attr = ` data-tt="${esc(h.t)}" data-tb="${esc(h.b)}"`; }
+  }
+  return `<td class="${cls}"${attr} style="background:${c.bg};color:${c.fg}">${esc(text) || "-"}</td>`;
 }
 const HEAD = { "サイコロ": "サイコロ<br>12日勝敗", "出来高": "出来高<br>20日比", "MACD": "MACD",
-               "ローソク足": "ローソク足", "移動平均": "移動平均<br>25日乖離" };
-function legend(el, labels) {
-  el.innerHTML = labels.map(([v, l]) => {
-    const c = colorFor(v); return `<span class="sw" style="background:${c.bg}"></span>${l}`;
-  }).join("&nbsp;");
+               "ローソク足": "ローソク足<span class='q'>?</span>", "移動平均": "移動平均<br>25日乖離" };
+function headRow(first) {
+  return `<thead><tr><th class="name">${first}</th><th>総合</th>${D.indicators.map(k =>
+    k === "ローソク足"
+      ? `<th class="tip" data-tt="ローソク足の見方" data-tb="${esc(D.candleBasics)}">${HEAD[k]}</th>`
+      : `<th>${HEAD[k] || k}</th>`).join("")}</tr></thead>`;
 }
+function legend(labels) {
+  return `<div class="legend">` + labels.map(([v, l]) => {
+    const c = colorFor(v); return `<span class="sw" style="background:${c.bg}"></span>${l}`;
+  }).join("&nbsp;") + `</div>`;
+}
+
+// ツールチップ：PCはカーソルを当てると、スマホはタップで表示
+const tip = document.getElementById("tip");
+const canHover = matchMedia("(hover: hover)").matches;
+function showTip(el, x, y) {
+  tip.innerHTML = `<b>${el.dataset.tt}</b>${el.dataset.tb}`;
+  tip.style.display = "block";
+  if (canHover) {
+    const w = tip.offsetWidth, hgt = tip.offsetHeight;
+    tip.style.left = Math.min(x + 14, innerWidth - w - 8) + "px";
+    tip.style.top = (y + 16 + hgt > innerHeight ? y - hgt - 12 : y + 16) + "px";
+  }
+}
+const hideTip = () => { tip.style.display = "none"; };
+document.addEventListener("mousemove", e => {
+  if (!canHover) return;
+  const el = e.target.closest("[data-tt]");
+  el ? showTip(el, e.clientX, e.clientY) : hideTip();
+});
+document.addEventListener("click", e => {
+  const el = e.target.closest("[data-tt]");
+  if (el) { e.stopPropagation(); showTip(el, e.clientX, e.clientY); return; }
+  if (!e.target.closest("#tip")) hideTip();
+}, true);
+addEventListener("scroll", () => { if (canHover) hideTip(); }, { passive: true });
 
 // ---- タブ ----
 document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
 function showTab(id) {
+  hideTip();
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === id));
   document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id === id));
   window.scrollTo({ top: 0 });
@@ -157,62 +209,77 @@ function showTab(id) {
 
 // ---- 今日 ----
 function renderToday() {
-  const ind = D.indicators;
-  let h = `<thead><tr><th class="name">セクター</th><th>総合</th>${ind.map(k => `<th>${HEAD[k] || k}</th>`).join("")}</tr></thead><tbody>`;
-  for (const r of D.today) {
-    h += `<tr class="click" data-name="${r.name}"><td class="name">${r.name}</td>`
-      + cell(fmt(r.total), r.total === null ? null : r.total / 50, "total")
-      + ind.map(k => cell(r.texts[k], r.scores[k])).join("") + "</tr>";
+  let html = "";
+  for (const g of D.groups) {
+    const sorted = g.today.slice().sort((a, b) => (b.total ?? -999) - (a.total ?? -999));
+    let h = headRow(g.name) + "<tbody>";
+    for (const r of g.today) {
+      h += `<tr><td class="name go" data-name="${esc(r.name)}">${esc(r.name)}<small>${r.date}</small></td>`
+        + cell(fmt(r.total), r.total === null ? null : r.total / 50, "total")
+        + D.indicators.map(k => cell(r.texts[k], r.scores[k], "", k)).join("") + "</tr>";
+    }
+    const line = r => `${esc(r.name)}（${fmt(r.total)}）`;
+    const tops = g.sorted ? `<div class="tops" style="margin-bottom:10px">
+        <div><b>買い寄り上位</b>${sorted.slice(0, 3).map(line).join("<br>")}</div>
+        <div><b>売り寄り上位</b>${sorted.slice(-3).reverse().map(line).join("<br>")}</div></div>` : "";
+    html += `<div class="card"><h2>${esc(g.name)}</h2>${tops}
+      <div class="scroll"><table>${h}</tbody></table></div>
+      ${legend([[-2, "−2"], [-1, "−1"], [0, "0"], [1, "+1"], [2, "+2"]])}</div>`;
   }
-  document.getElementById("sigTable").innerHTML = h + "</tbody>";
-  document.querySelectorAll("#sigTable tr.click").forEach(tr =>
-    tr.addEventListener("click", () => { sel.value = tr.dataset.name; showTab("detail"); }));
-
-  const top = D.today.slice(0, 3), bottom = D.today.slice(-3).reverse();
-  const line = r => `${r.name}（${fmt(r.total)}）`;
-  document.getElementById("tops").innerHTML =
-    `<div><b>買い寄り上位</b>${top.map(line).join("<br>")}</div>` +
-    `<div><b>売り寄り上位</b>${bottom.map(line).join("<br>")}</div>`;
-  legend(document.getElementById("legend1"), [[-2, "−2"], [-1, "−1"], [0, "0"], [1, "+1"], [2, "+2"]]);
+  const box = document.getElementById("todayGroups");
+  box.innerHTML = html;
+  box.querySelectorAll("td.go").forEach(td =>
+    td.addEventListener("click", () => { sel.value = td.dataset.name; showTab("detail"); }));
 }
 
 // ---- 推移 ----
 function renderHistory() {
-  const H = D.history, n = H.dates.length;
-  let h = `<thead><tr><th class="name"></th>${H.dates.map((d, i) =>
-    `<th>${(i === n - 1 || (n - 1 - i) % 10 === 0) ? `<span>${d.replace(/^0/, "")}</span>` : ""}</th>`).join("")}</tr></thead><tbody>`;
-  for (const r of H.rows) {
-    h += `<tr><td class="name">${r.name}</td>` + r.values.map((v, i) => {
-      const c = colorFor(v === null ? null : v / 50);
-      return `<td class="c" data-i="${i}" data-n="${r.name}" style="background:${c.bg}"></td>`;
-    }).join("") + "</tr>";
-  }
-  const t = document.getElementById("histTable");
-  t.innerHTML = h + "</tbody>";
-  t.addEventListener("click", e => {
-    const td = e.target.closest("td.c"); if (!td) return;
-    const row = H.rows.find(r => r.name === td.dataset.n), i = +td.dataset.i;
-    document.getElementById("histInfo").textContent = `${td.dataset.n}｜${H.dates[i]}：総合 ${fmt(row.values[i])}`;
+  let html = "";
+  D.groups.forEach((g, gi) => {
+    const H = g.history, n = H.dates.length;
+    let h = `<thead><tr><th class="name"></th>${H.dates.map((d, i) =>
+      `<th>${(i === n - 1 || (n - 1 - i) % 10 === 0) ? `<span>${d.replace(/^0/, "")}</span>` : ""}</th>`).join("")}</tr></thead><tbody>`;
+    for (const r of H.rows) {
+      h += `<tr><td class="name">${esc(r.name)}</td>` + r.values.map((v, i) => {
+        const c = colorFor(v === null ? null : v / 50);
+        return `<td class="c" data-g="${gi}" data-i="${i}" data-n="${esc(r.name)}" style="background:${v === null ? "#fff" : c.bg}"></td>`;
+      }).join("") + "</tr>";
+    }
+    html += `<div class="card"><h2>${esc(g.name)}</h2>
+      <div class="histInfo" id="histInfo${gi}">マスをタップすると数値を表示</div>
+      <div class="scroll"><table class="hist">${h}</tbody></table></div>
+      ${legend([[-2, "−100"], [-1, "−50"], [0, "0"], [1, "+50"], [2, "+100"]])}</div>`;
   });
-  // 最新日が見えるよう右端までスクロール
-  requestAnimationFrame(() => { const s = t.parentElement; s.scrollLeft = s.scrollWidth; });
-  legend(document.getElementById("legend2"), [[-2, "−100"], [-1, "−50"], [0, "0"], [1, "+50"], [2, "+100"]]);
+  const box = document.getElementById("historyGroups");
+  box.innerHTML = html;
+  box.addEventListener("click", e => {
+    const td = e.target.closest("td.c"); if (!td) return;
+    const g = D.groups[+td.dataset.g], i = +td.dataset.i;
+    const row = g.history.rows.find(r => r.name === td.dataset.n);
+    const v = row.values[i];
+    document.getElementById("histInfo" + td.dataset.g).textContent =
+      `${td.dataset.n}｜${g.history.dates[i]}：` + (v === null ? "休場" : `総合 ${fmt(v)}`);
+  });
+}
+function scrollHistoryRight() {
+  document.querySelectorAll("#historyGroups .scroll").forEach(s => { s.scrollLeft = s.scrollWidth; });
 }
 
 // ---- 詳細 ----
 const sel = document.getElementById("sectorSel");
 function renderDetailSelect() {
-  sel.innerHTML = D.today.map(r => `<option value="${r.name}">${r.name}（総合 ${fmt(r.total)}）</option>`).join("");
+  sel.innerHTML = D.groups.map(g => `<optgroup label="${esc(g.name)}">` +
+    g.today.map(r => `<option value="${esc(r.name)}">${esc(r.name)}（総合 ${fmt(r.total)}）</option>`).join("") +
+    `</optgroup>`).join("");
   sel.addEventListener("change", drawChart);
 }
+const n2 = v => v === null ? "-" : v.toLocaleString("ja-JP", { maximumFractionDigits: 2 });
 function drawChart() {
   const S = D.detail[sel.value]; if (!S) return;
-  // 内訳表
-  const ind = D.indicators;
-  let h = `<thead><tr><th class="name">日付</th><th>総合</th>${ind.map(k => `<th>${HEAD[k] || k}</th>`).join("")}</tr></thead><tbody>`;
+  let h = headRow("日付") + "<tbody>";
   for (const r of S.last10) {
     h += `<tr><td class="name">${r.date}</td>` + cell(fmt(r.total), r.total === null ? null : r.total / 50, "total")
-      + ind.map(k => cell(r.texts[k], r.scores[k])).join("") + "</tr>";
+      + D.indicators.map(k => cell(r.texts[k], r.scores[k], "", k)).join("") + "</tr>";
   }
   document.getElementById("last10").innerHTML = h + "</tbody>";
 
@@ -223,32 +290,61 @@ function drawChart() {
     return;
   }
   const x = S.dates;
+  // ローソク足のホバー文（値段＋説明）。説明は長いので適度に改行する
+  const wrap = (t, n = 22) => t.replace(new RegExp(`(.{${n}})`, "g"), "$1<br>");
+  const hover = x.map((d, i) => {
+    const t = S.candle[i] || {};
+    const basic = ["陽線", "陰線", "十字"].includes(t.t);   // パターンが無い日は説明側と同じ判定を使う
+    const kind = basic ? t.t : (S.c[i] > S.o[i] ? "陽線" : S.c[i] < S.o[i] ? "陰線" : "十字");
+    return `<b>${d}　${kind}</b><br>始値 ${n2(S.o[i])}　高値 ${n2(S.h[i])}<br>安値 ${n2(S.l[i])}　終値 ${n2(S.c[i])}`
+      + (t.t ? `<br><br><b>${t.t}</b><br>${wrap(t.b)}` : "");
+  });
   const traces = [
     { type: "candlestick", x, open: S.o, high: S.h, low: S.l, close: S.c, name: "価格",
+      text: hover, hoverinfo: "text", hoverlabel: { align: "left" },
       increasing: { line: { color: "#c0392b" } }, decreasing: { line: { color: "#1f618d" } }, yaxis: "y" },
-    { type: "scatter", x, y: S.ma25, name: "25日線", line: { width: 1.2, color: "#7d3c98" }, yaxis: "y" },
-    { type: "scatter", x, y: S.ma75, name: "75日線", line: { width: 1.2, color: "#ca6f1e" }, yaxis: "y" },
-    { type: "bar", x, y: S.turnover, name: "売買代金(億円)", marker: { color: "#aab2b5" }, yaxis: "y2" },
-    { type: "bar", x, y: S.hist, name: "MACDヒスト", yaxis: "y3",
+    { type: "scatter", x, y: S.ma25, name: "25日線", line: { width: 1.2, color: "#7d3c98" }, yaxis: "y", hoverinfo: "skip" },
+    { type: "scatter", x, y: S.ma75, name: "75日線", line: { width: 1.2, color: "#ca6f1e" }, yaxis: "y", hoverinfo: "skip" },
+    { type: "bar", x, y: S.vol, name: S.volLabel, marker: { color: "#aab2b5" }, yaxis: "y2", hoverinfo: "skip" },
+    { type: "bar", x, y: S.hist, name: "MACDヒスト", yaxis: "y3", hoverinfo: "skip",
       marker: { color: S.hist.map(v => v > 0 ? "#1e8449" : "#c0392b") } },
-    { type: "scatter", x, y: S.macd, name: "MACD", line: { width: 1, color: "#2874a6" }, yaxis: "y3" },
-    { type: "scatter", x, y: S.signal, name: "シグナル", line: { width: 1, color: "#ca6f1e" }, yaxis: "y3" },
+    { type: "scatter", x, y: S.macd, name: "MACD", line: { width: 1, color: "#2874a6" }, yaxis: "y3", hoverinfo: "skip" },
+    { type: "scatter", x, y: S.signal, name: "シグナル", line: { width: 1, color: "#ca6f1e" }, yaxis: "y3", hoverinfo: "skip" },
   ];
   const layout = {
-    margin: { l: 40, r: 8, t: 8, b: 24 }, showlegend: false, dragmode: false,
+    margin: { l: 44, r: 8, t: 8, b: 24 }, showlegend: false, dragmode: false, hovermode: "x", hoverdistance: -1, spikedistance: -1,
     paper_bgcolor: "#fff", plot_bgcolor: "#fff", font: { size: 10 },
-    xaxis: { rangeslider: { visible: false }, rangebreaks: [{ bounds: ["sat", "mon"] }], anchor: "y3" },
-    yaxis: { domain: [0.42, 1] }, yaxis2: { domain: [0.24, 0.39] }, yaxis3: { domain: [0, 0.21] },
+    xaxis: { showspikes: true, spikemode: "across", spikethickness: 1, spikecolor: "#9ca3af", spikedash: "solid",
+             rangeslider: { visible: false }, rangebreaks: [{ bounds: ["sat", "mon"] }], anchor: "y3" },
+    yaxis: { domain: [0.42, 1] },
+    yaxis2: { domain: [0.24, 0.39], title: { text: S.volLabel.replace("（", "<br>（"), font: { size: 9 } } },
+    yaxis3: { domain: [0, 0.21] },
   };
   Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: false });
+  // スマホ：タップした位置の日のローソク足の説明を出す（タッチではホバーが出ないことがあるため）
+  if (!el.dataset.tapBound) {
+    el.dataset.tapBound = "1";
+    el.addEventListener("pointerup", e => {
+      if (e.pointerType === "mouse") return;   // PCは通常のホバーで表示される
+      const S2 = D.detail[sel.value], xa = el._fullLayout && el._fullLayout.xaxis;
+      if (!S2 || !xa) return;
+      const px = e.clientX - el.getBoundingClientRect().left - xa._offset;
+      if (px < 0 || px > xa._length) return;
+      const t = new Date(xa.p2d(px)).getTime();
+      let best = 0, bd = Infinity;
+      S2.dates.forEach((d, i) => { const dd = Math.abs(new Date(d).getTime() - t); if (dd < bd) { bd = dd; best = i; } });
+      setTimeout(() => Plotly.Fx.hover(el, [{ curveNumber: 0, pointNumber: best }]), 30);
+    }, true);
+  }
 }
 
 // ---- 起動 ----
 if (!D) {
   document.querySelector("main").innerHTML = '<div class="card">データが入っていません。make_html.py で作成してください。</div>';
 } else {
-  document.getElementById("meta").textContent = `${D.region}｜基準日 ${D.asOf}｜更新 ${D.generated}`;
+  document.getElementById("meta").textContent = `更新 ${D.generated}（各行の日付は、その市場の最新取引日）`;
   renderToday(); renderHistory(); renderDetailSelect();
+  document.querySelector('nav button[data-tab="history"]').addEventListener("click", () => requestAnimationFrame(scrollHistoryRight));
 }
 </script>
 </body>

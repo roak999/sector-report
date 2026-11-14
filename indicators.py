@@ -30,7 +30,7 @@ def score_psychological(close: pd.Series, n: int = 12) -> pd.Series:
 def score_volume(close: pd.Series, turnover: pd.Series, n: int = 20) -> pd.Series:
     """出来高（売買代金）変化: 当日 ÷ 過去n日平均。
     1.5倍以上で上昇=+2、1.2倍以上で上昇=+1（下落なら符号反転）"""
-    avg = turnover.shift(1).rolling(n).mean()
+    avg = turnover.shift(1).rolling(n, min_periods=n // 2).mean()  # 欠損日が少しあっても計算する
     ratio = turnover / avg
     direction = np.sign(close.diff())
     s = pd.Series(0, index=close.index, dtype=float)
@@ -162,9 +162,10 @@ def describe_all(ohlc: pd.DataFrame, turnover: pd.Series) -> pd.DataFrame:
         for w, x, dr in zip(win, lose, draw)], index=idx)
 
     # 出来高: 20日平均比
-    ratio = t / t.shift(1).rolling(20).mean()
+    ratio = t / t.shift(1).rolling(20, min_periods=10).mean()
     arrow = np.where(d > 0, "↑", np.where(d < 0, "↓", "→"))
-    vol = pd.Series(["" if pd.isna(r) else f"{r:.2f}倍{a}" for r, a in zip(ratio, arrow)], index=idx)
+    vol = pd.Series([("データなし" if pd.isna(tv) else "") if pd.isna(r) else f"{r:.2f}倍{a}"
+                     for r, a, tv in zip(ratio, arrow, t)], index=idx)
 
     # MACD: クロスからの日数、またはヒストグラム
     _, _, hist = macd(c)
@@ -229,3 +230,34 @@ def composite(scores: pd.DataFrame, weights: dict, trend_damp: float = 0.5) -> p
     den = (2 * w.where(scores.notna(), 0)).sum(axis=1)
     out = (num / den.replace(0, np.nan) * 100).round(0)
     return out
+
+
+# ---------- ローソク足の説明（画面のツールチップ用） ----------
+
+CANDLE_BASICS = (
+    "ローソク足は1日の値動きを1本で表したもの。"
+    "四角い部分（実体）は始値と終値の間、上下の細い線（ヒゲ）は高値と安値。"
+    "終値が始値より高い日は陽線（チャートでは赤）、低い日は陰線（チャートでは青）。"
+)
+
+CANDLE_HELP = {
+    "陽の包み足": "前日の陰線を、当日の大きな陽線がすっぽり包んだ形。売りが買いに逆転したことを示し、下落から上昇への転換サインとされる（点数 +2）。",
+    "赤三兵": "陽線が3日続き、終値も毎日切り上がっている形。買いの勢いが強く、上昇が続きやすいサイン（点数 +2）。",
+    "ハンマー": "実体が小さく、下ヒゲが長い形。一時大きく売られたが買い戻されたことを示し、底打ちのサインとされる（点数 +1）。",
+    "陰の包み足": "前日の陽線を、当日の大きな陰線がすっぽり包んだ形。買いが売りに逆転したことを示し、上昇から下落への転換サインとされる（点数 −2）。",
+    "黒三兵": "陰線が3日続き、終値も毎日切り下がっている形。売りの勢いが強く、下落が続きやすいサイン（点数 −2）。",
+    "上ヒゲ": "実体が小さく、上ヒゲが長い形。一時大きく買われたが売り戻されたことを示し、天井のサインとされる（点数 −1）。",
+    "陽線": "終値が始値より高い日（買いが優勢）。% は始値からの上昇幅。特別なパターンではないので点数は 0。",
+    "陰線": "終値が始値より低い日（売りが優勢）。% は始値からの下落幅。特別なパターンではないので点数は 0。",
+    "十字": "始値と終値がほぼ同じ日。買いと売りが拮抗していて、相場の迷いを表す（点数 0）。",
+}
+
+
+def candle_help(text: str) -> tuple:
+    """ローソク足欄の表示文字（例: '陽線+0.4%'）から (見出し, 説明) を返す"""
+    if not text:
+        return "", ""
+    for key in CANDLE_HELP:
+        if text.startswith(key):
+            return key, CANDLE_HELP[key]
+    return text, ""
