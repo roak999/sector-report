@@ -23,7 +23,8 @@ import numpy as np
 import pandas as pd
 
 from stocks import (L_ENTRY, L_RISK, L_STOCK, MIN_COV, TYPES, W_ENTRY, W_RISK, W_STOCK,
-                    components, features)
+                    components, features, sel_scores, heat_levels, HEAT_ITEMS, CANDLE_KIND)
+from indicators import candle_patterns
 from scoring import weighted_score
 
 HORIZONS = (5, 10, 20)
@@ -38,6 +39,7 @@ YEAR_DAYS = 245
 STOCK_EDGES = [(0, 30), (30, 40), (40, 50), (50, 60), (60, 70), (70, 101)]
 ENTRY_EDGES = [(0, 30), (30, 50), (50, 70), (70, 101)]
 RISK_EDGES = [(0, 40), (40, 50), (50, 60), (60, 70), (70, 101)]
+SEL_EDGES = [(0, 20), (20, 40), (40, 60), (60, 80), (80, 101)]
 
 
 def _r(v, nd=2):
@@ -77,7 +79,8 @@ def build_panels(prices: dict, universe: dict, topix: pd.Series):
             sec_rank[ts] = B[ts].rank(axis=1, pct=True)
 
     names = ["score", "entry", "risk", "trend", "momentum", "volume", "rs", "secrel",
-             "pullback", "macd", "breakout", "rsi", "atr", "drawdown", "stability", "t1", "t2", "t3", "C"]
+             "pullback", "macd", "breakout", "rsi", "atr", "drawdown", "stability", "t1", "t2", "t3", "C"] \
+        + ["h_" + k for k, _, _ in HEAT_ITEMS] + ["c_" + k for k in CANDLE_KIND]
     P = {k: {} for k in names}
     for t in used:
         f, cp = feats[t], comps[t]
@@ -112,12 +115,23 @@ def build_panels(prices: dict, universe: dict, topix: pd.Series):
         for k in ("atr", "drawdown", "stability"):
             P[k][t] = cp["risk"][k]
         P["t1"][t], P["t2"][t], P["t3"][t] = t1, t2, t3
+        for k, v in heat_levels(f, ex).items():
+            P["h_" + k][t] = v
+        pats = candle_patterns(f["o"], f["h"], f["l"], f["c"])
+        for k in CANDLE_KIND:
+            P["c_" + k][t] = pats[k]
         P["C"][t] = c
 
     out = {}
     for k, d in P.items():
         df = pd.DataFrame(d).reindex(cal)
-        out[k] = df.fillna(False).astype(bool) if k in ("t1", "t2", "t3") else df
+        out[k] = df.fillna(False).astype(bool) if k in ("t1", "t2", "t3") or k.startswith("c_") else df
+    lev = [out["h_" + k] for k, _, _ in HEAT_ITEMS]
+    out["os"] = sum((x == -1).astype(int) for x in lev)      # 売られすぎが点灯した指標の数
+    out["ob"] = sum((x == 1).astype(int) for x in lev)       # 買われすぎが点灯した指標の数
+    sel, selc, _ = sel_scores(out["C"])          # 選別スコア（検証版）と、その3要素
+    out["sel"] = sel
+    out["sel_mom"], out["sel_rev20"], out["sel_dev75"] = selc["mom"], selc["rev20"], selc["dev75"]
     return out, cal
 
 
@@ -222,6 +236,10 @@ REVIEW_SETS = [
     ("エントリー：押し目＋RSI", dict(pullback=1, rsi=1)),
     ("エントリー：MACD＋上抜け", dict(macd=1, breakout=1)),
     ("リスク（安全度）の3要素", dict(atr=30, drawdown=25, stability=25)),
+    ("【新】選別スコア：長期モメンタム＋20日の押し＋75日線の押し（各1/3）", dict(sel_mom=1, sel_rev20=1, sel_dev75=1)),
+    ("【新】長期モメンタムだけ（12か月−1か月）", dict(sel_mom=1)),
+    ("【新】20日の押しだけ", dict(sel_rev20=1)),
+    ("【新】75日線の押しだけ", dict(sel_dev75=1)),
 ]
 
 
@@ -253,6 +271,20 @@ def build_review(P: dict, F20: pd.DataFrame, first, last):
                      "ic1": _r(ic[ic.index < mid].mean(), 3), "ic2": _r(ic[ic.index >= mid].mean(), 3),
                      "sp1": _spread(X, F, first, mid), "sp2": _spread(X, F, mid, last + pd.Timedelta(days=1))})
     return {"split": mid.strftime("%Y-%m-%d"), "start": first.strftime("%Y-%m-%d"), "end": last.strftime("%Y-%m-%d"), "rows": rows}
+
+def build_regime(P: dict, F20: pd.DataFrame, tp: pd.Series, first):
+    """市場局面別（TOPIXが200日線の上／下）の、スコアと将来リターンの順位相関IC。局面は、その日までの価格だけで判定する"""
+    up = (tp > tp.rolling(200).mean()).reindex(P["score"].index)
+    valid = tp.rolling(200).mean().reindex(P["score"].index).notna()
+    F = F20 - COST_RT
+    rows = []
+    for key, label in (("score", "現行の個別銘柄スコア"), ("sel", "選別スコア（検証版）")):
+        ic = _ic_series(P[key], F)
+        ic = ic[(ic.index >= first)]
+        u = up.reindex(ic.index).fillna(False) & valid.reindex(ic.index).fillna(False)
+        d = (~up.reindex(ic.index).fillna(False)) & valid.reindex(ic.index).fillna(False)
+        rows.append({"label": label, "icUp": _r(ic[u].mean(), 3), "nUp": int(u.sum()), "icDown": _r(ic[d].mean(), 3), "nDown": int(d.sum())})
+    return rows
 
 def build_backtest(prices: dict, universe: dict, topix: pd.Series, n225: pd.Series | None):
     P, cal = build_panels(prices, universe, topix)
@@ -291,17 +323,32 @@ def build_backtest(prices: dict, universe: dict, topix: pd.Series, n225: pd.Seri
         return rows
 
     stock_b, entry_b, risk_b = bands(S, STOCK_EDGES), bands(P["entry"], ENTRY_EDGES), bands(P["risk"], RISK_EDGES)
+    sel_b = bands(P["sel"], SEL_EDGES)
     types = []
     for k in (1, 2, 3):
         d = stats(P[f"t{k}"])
         d["id"], d["label"] = k, TYPES[k]
         types.append(d)
 
+    # ---- 過熱・売られすぎ、ローソク足シグナル ----
+    heat_rows = []
+    for n in (2, 3, 4):
+        d = stats(P["os"] >= n); d.update(label=f"売られすぎが{n}個以上点灯", group="売られすぎ"); heat_rows.append(d)
+    for n in (2, 3, 4):
+        d = stats(P["ob"] >= n); d.update(label=f"買われすぎが{n}個以上点灯", group="買われすぎ"); heat_rows.append(d)
+    for k, label, _ in HEAT_ITEMS:
+        d = stats(P["h_" + k] == -1); d.update(label=f"{label}：売られすぎ", group="単独（売られすぎ）"); heat_rows.append(d)
+        d = stats(P["h_" + k] == 1); d.update(label=f"{label}：買われすぎ", group="単独（買われすぎ）"); heat_rows.append(d)
+    candle_rows = []
+    for k, kind in CANDLE_KIND.items():
+        d = stats(P["c_" + k]); d.update(label=k + ("（買い系）" if kind > 0 else "（売り系）"), group="買い系" if kind > 0 else "売り系"); candle_rows.append(d)
+
     # ---- 累積リターン ----
     # 運用ルール：買い基準と売り基準を分けて（ヒステリシス）入れ替えを抑える。毎日入れ替えると売買コストが重い
     low = _hold_rule(-S, -35, -55)        # 低スコア（35未満で保有、55以上で売り）。参考用
     strat = {"銘柄スコア：70以上で買い・50未満で売り": _hold_rule(S, 70, 50),
              "銘柄スコア：60以上で買い・45未満で売り": _hold_rule(S, 60, 45),
+             "選別スコア（検証版）：70以上で買い・50未満で売り": _hold_rule(P["sel"], 70, 50),
              "参考：低スコア（35未満で買い・55以上で売り）": low,
              "代表銘柄の平均（全銘柄を等金額）": S.notna()}
     rets, turns = {}, {}
@@ -353,7 +400,8 @@ def build_backtest(prices: dict, universe: dict, topix: pd.Series, n225: pd.Seri
         "assume": {"entry": "シグナル翌営業日の終値で約定", "exit": "約定の5/10/20営業日後の終値で決済",
                    "feeSide": COST_FEE * 100, "slipSide": COST_SLIP * 100, "roundTrip": COST_RT * 100},
         "weights": {"stock": W_STOCK, "entry": W_ENTRY, "risk": W_RISK},
-        "stockBands": stock_b, "entryBands": entry_b, "riskBands": risk_b, "types": types,
+        "stockBands": stock_b, "selBands": sel_b, "heatRows": heat_rows, "candleRows": candle_rows, "entryBands": entry_b, "riskBands": risk_b, "types": types,
         "curves": curves, "ic": ic_rows, "years": years,
         "review": build_review(P, FWD[20], first, last),
+        "regime": build_regime(P, FWD[20], tp, first),
     }

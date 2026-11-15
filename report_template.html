@@ -279,6 +279,21 @@ const pcCls = v => v === null || v === undefined ? "" : v > 0 ? "up" : v < 0 ? "
 const REG_COLOR = ["#1e8449", "#82a83d", "#c0392b", "#7d3c98"];
 const nz = (v, d = 0) => v === null || v === undefined ? ND : v.toLocaleString("ja-JP", { maximumFractionDigits: d });
 function scoreBadge(v) { return `<span class="pill" style="background:${score100Color(v)};color:${fg100(v)}">${v ?? "-"}</span>`; }
+const HEAT_C = { 1: ["買われすぎ", "#c0392b"], "-1": ["売られすぎ", "#1f618d"], 0: ["中立", "#9ca3af"] };
+const heatBadge = lv => lv === null || lv === undefined ? `<span class="pill" style="background:#d1d5db;color:#374151">${ND}</span>` : `<span class="pill" style="background:${HEAT_C[lv][1]}">${HEAT_C[lv][0]}</span>`;
+function heatCard(r) {
+  const H = r.heat; if (!H) return "";
+  const cs = (r.candles || []).map(c => `<span class="pill" style="background:${c.kind > 0 ? "#c0392b" : "#1f618d"};cursor:help" title="${esc(c.help)}">${esc(c.name)}（${c.daysAgo === 0 ? "当日" : c.daysAgo + "日前"}・${c.kind > 0 ? "買い系" : "売り系"}）</span>`).join(" ");
+  return `<div class="card"><h2>過熱・売られすぎ（参考） <small class="meta">　売られすぎ ${H.os}個／買われすぎ ${H.ob}個が点灯（6指標中）</small></h2>
+    <div class="scroll"><table><thead><tr><th class="name">指標</th><th>現在の値</th><th>判定</th><th class="name">判定の基準</th></tr></thead><tbody>
+      ${H.items.map(i => `<tr><td class="name">${esc(i.label)}</td><td>${i.value === null ? ND : esc(i.value)}</td><td>${heatBadge(i.level)}</td><td class="name"><small class="meta">${esc(i.rule)}</small></td></tr>`).join("")}</tbody></table></div>
+    <div style="margin-top:8px"><b>直近5日のローソク足シグナル：</b>${cs || "<span class=\"note\">特になし</span>"}</div>
+    <p class="note">売買の合図ではなく、過熱感を見る参考情報です。トレンドが強いときは、買われすぎがさらに続くこともあります。基準値は初期の仮説で、「検証」画面で、点灯数別・指標別・ローソク足別に、その後の成績を確かめています（ローソク足は、検証では差がほぼ見られませんでした）。</p></div>`;
+}
+function selBars(r) {
+  return (r.selComps || []).map(c => `<div>${esc(c.label)}　<b>${c.ratio === null ? ND : Math.round(c.ratio * 100) + " / 100"}</b><small class="meta">　実測 ${pc(c.raw)}</small>
+    <div class="bar"><i style="width:${c.ratio === null ? 0 : c.ratio * 100}%;background:${score100Color(c.ratio === null ? null : c.ratio * 100)}"></i></div></div>`).join("");
+}
 function compBars(comps) {
   return comps.map(c => `<div>${esc(c.label)}　<b>${c.points === null ? ND : c.points + " / " + c.max}</b>
     <div class="bar"><i style="width:${c.ratio === null ? 0 : c.ratio * 100}%;background:${score100Color(c.ratio === null ? null : c.ratio * 100)}"></i></div></div>`).join("");
@@ -618,7 +633,7 @@ function stkLink(r) { return `<a class="gostock" data-c="${r.code}" style="curso
 document.addEventListener("click", e => { const a = e.target.closest(".gostock"); if (a) { showMenu("stock"); loadStock(a.dataset.c); } });
 
 // ---- ③ 個別銘柄スクリーニング ----
-const scr = { type: 0, q: "", sector: "", minTotal: "", minSector: "", minScore: "", minRs: "", minVol: "", rsiMin: "", rsiMax: "", minAdx: "", minRet20: "",
+const scr = { type: 0, q: "", sector: "", minTotal: "", minSector: "", minScore: "", minSel: "", minRs: "", minVol: "", rsiMin: "", rsiMax: "", minAdx: "", minRet20: "",
               macd: "", a25: false, a75: false, g: false, sort: "total", watchOnly: false };
 function renderScreen() {
   const box = document.getElementById("screenBody");
@@ -639,6 +654,7 @@ function renderScreen() {
       <label class="note">総合スコア ≧${inp("minTotal", "0〜100")}</label>
       <label class="note">セクタースコア ≧${inp("minSector", "0〜100")}</label>
       <label class="note">銘柄スコア ≧${inp("minScore", "0〜100")}</label>
+      <label class="note">選別スコア(検証版) ≧${inp("minSel", "0〜100")}</label>
       <label class="note">TOPIX比RS(20日,%) ≧${inp("minRs", "例 0")}</label>
       <label class="note">出来高増加率(%) ≧${inp("minVol", "例 20")}</label>
       <label class="note">RSI 下限${inp("rsiMin", "例 40")}</label>
@@ -646,6 +662,7 @@ function renderScreen() {
       <label class="note">ADX ≧${inp("minAdx", "例 20")}</label>
       <label class="note">20日騰落率(%) ≧${inp("minRet20", "例 0")}</label>
       <label class="note">MACD<select id="f_macd" style="font-size:14px;padding:6px"><option value="">指定なし</option><option value="pos">ヒストグラムがプラス</option><option value="up">ヒストグラムが上向き</option><option value="posup">プラスかつ上向き</option></select></label>
+      <label class="note">過熱感<select id="f_heat" style="font-size:14px;padding:6px"><option value="">指定なし</option><option value="os2">売られすぎ 2個以上</option><option value="os3">売られすぎ 3個以上</option><option value="ob2">買われすぎ 2個以上</option><option value="ob3">買われすぎ 3個以上</option></select></label>
     </div>
     <div class="chkrow" style="margin-top:6px"><label><input type="checkbox" id="f_a25">株価>25日線</label><label><input type="checkbox" id="f_a75">株価>75日線</label>
       <label><input type="checkbox" id="f_g">25日線>75日線</label><label><input type="checkbox" id="f_watch">登録銘柄のみ</label>
@@ -661,8 +678,8 @@ function renderScreen() {
   const g = id => document.getElementById(id);
   const num_ = id => { const v = g("f_" + id).value; return v === "" ? null : +v; };
   const upd = () => {
-    scr.q = g("f_q").value.trim(); scr.sector = g("f_sector").value; scr.macd = g("f_macd").value; scr.sort = g("f_sort").value;
-    ["minTotal", "minSector", "minScore", "minRs", "minVol", "rsiMin", "rsiMax", "minAdx", "minRet20"].forEach(k => { scr[k] = num_(k); });
+    scr.q = g("f_q").value.trim(); scr.sector = g("f_sector").value; scr.macd = g("f_macd").value; scr.heat = g("f_heat").value; scr.sort = g("f_sort").value;
+    ["minTotal", "minSector", "minScore", "minSel", "minRs", "minVol", "rsiMin", "rsiMax", "minAdx", "minRet20"].forEach(k => { scr[k] = num_(k); });
     scr.a25 = g("f_a25").checked; scr.a75 = g("f_a75").checked; scr.g = g("f_g").checked; scr.watchOnly = g("f_watch").checked;
     drawScreenTable();
   };
@@ -670,7 +687,7 @@ function renderScreen() {
   g("scrTypes").addEventListener("click", e => { const t = e.target.dataset.t; if (t === undefined) return; scr.type = +t;
     g("scrTypes").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.t === t)); drawScreenTable(); });
   g("f_reset").addEventListener("click", () => { box.querySelectorAll("input[type=number],input[type=search]").forEach(i => { i.value = ""; });
-    g("f_sector").value = ""; g("f_macd").value = ""; box.querySelectorAll("input[type=checkbox]").forEach(i => { i.checked = false; }); upd(); });
+    g("f_sector").value = ""; g("f_macd").value = ""; g("f_heat").value = ""; box.querySelectorAll("input[type=checkbox]").forEach(i => { i.checked = false; }); upd(); });
   drawScreenTable();
 }
 function drawScreenTable() {
@@ -680,6 +697,8 @@ function drawScreenTable() {
     (!s.sector || r.sector === s.sector) && (s.minTotal === null || s.minTotal === "" || (r.total ?? -1) >= s.minTotal) &&
     (s.minSector === null || s.minSector === "" || (r.sectorScore !== null && r.sectorScore >= s.minSector)) &&
     (s.minScore === null || s.minScore === "" || (r.score ?? -1) >= s.minScore) &&
+    (s.minSel === null || s.minSel === "" || (r.sel ?? -1) >= s.minSel) &&
+    (!s.heat || (r.heat && r.heat[s.heat.slice(0, 2)] >= +s.heat.slice(2))) &&
     (s.minRs === null || s.minRs === "" || (r.rs20 !== null && r.rs20 >= s.minRs)) &&
     (s.minVol === null || s.minVol === "" || (r.volInc !== null && r.volInc >= s.minVol)) &&
     (s.rsiMin === null || s.rsiMin === "" || (r.rsi !== null && r.rsi >= s.rsiMin)) && (s.rsiMax === null || s.rsiMax === "" || (r.rsi !== null && r.rsi <= s.rsiMax)) &&
@@ -691,14 +710,16 @@ function drawScreenTable() {
   const shown = rows.slice(0, 100);
   document.getElementById("scrCount").textContent = `${rows.length}銘柄が該当${rows.length > 100 ? "（上位100件を表示）" : ""}`;
   const sc = v => `<td style="background:${score100Color(v)};color:${fg100(v)};font-weight:700">${v ?? "-"}</td>`;
-  let h = `<thead><tr><th class="name">銘柄</th><th>セクター</th><th>株価</th><th>前日比</th><th>総合</th><th>銘柄</th><th>RS<br>20日</th><th>出来高<br>増加率</th><th>タイミング</th><th>安全度</th><th>分類</th></tr></thead><tbody>`;
+  let h = `<thead><tr><th class="name">銘柄</th><th>セクター</th><th>株価</th><th>前日比</th><th>総合</th><th>銘柄</th><th>選別<br><small>検証版</small></th><th>RS<br>20日</th><th>出来高<br>増加率</th><th>タイミング</th><th>安全度</th><th>過熱感</th><th>分類</th></tr></thead><tbody>`;
   for (const r of shown) {
     h += `<tr class="click" data-c="${r.code}"><td class="name">${r.watch ? "★" : ""}${esc(r.name)}<small>${r.code}</small></td>
-      <td>${esc(r.sector)}</td><td class="num">${nz(r.price, 0)}</td><td class="num ${pcCls(r.chg1)}">${pc(r.chg1)}</td>${sc(r.total)}${sc(r.score)}
+      <td>${esc(r.sector)}</td><td class="num">${nz(r.price, 0)}</td><td class="num ${pcCls(r.chg1)}">${pc(r.chg1)}</td>${sc(r.total)}${sc(r.score)}${sc(r.sel)}
       <td class="num ${pcCls(r.rs20)}">${pc(r.rs20)}</td><td class="num ${pcCls(r.volInc)}">${r.volInc === null ? ND : pc(r.volInc, 0)}</td>${sc(r.entry)}${sc(r.risk)}
+      <td>${r.heat ? (r.heat.os ? `<span class="pill" style="background:#1f618d">売${r.heat.os}</span> ` : "") + (r.heat.ob ? `<span class="pill" style="background:#c0392b">買${r.heat.ob}</span>` : "") || "-" : "-"}</td>
       <td>${r.tags.map(t => ["", "①", "②", "③"][t]).join("") || "-"}</td></tr>
-      <tr class="exp" id="sx_${r.code}" style="display:none"><td colspan="11"><div class="grid2">
+      <tr class="exp" id="sx_${r.code}" style="display:none"><td colspan="13"><div class="grid2">
         <div><b>個別銘柄スコア ${r.score}</b>　（総合 ${r.total} ＝ 市場${r.marketScore ?? ND}×0.2 ＋ セクター${r.sectorScore ?? ND}×0.3 ＋ 銘柄${r.score}×0.5）${compBars(r.comps)}</div>
+        <div><b>選別スコア（検証版） ${r.sel ?? ND}</b>${selBars(r)}<div class="note">長期は強く、直近は押している銘柄を高く評価（10年検証で順位相関がプラス）。</div></div>
         <div><b>エントリータイミング ${r.entry ?? ND}</b>${compBars(r.entryComps)}</div>
         <div><b>リスク（高いほど安全） ${r.risk ?? ND}</b>${compBars(r.riskComps)}<div class="note">セクター集中リスクは保有銘柄が決まると計算できるため、現状は除外して再計算しています。</div></div>
         <div class="kv"><span>RSI / ADX</span><b>${r.rsi ?? ND} / ${r.adx ?? ND}</b><span>MACD</span><b>${esc(r.macd)}</b><span>25日線乖離</span><b>${pc(r.dev25)}</b>
@@ -748,7 +769,7 @@ async function loadStock(code) {
     <div style="font-size:24px;font-weight:800">${nz(r.price, 0)}円 <span class="${pcCls(r.chg1)}" style="font-size:15px">${pc(r.chg1, 2)}</span></div>
     <div class="grid2" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr));margin-top:8px">
       ${big("総合評価", r.total, "市場×0.2＋セクター×0.3＋銘柄×0.5")}${big("市場スコア", r.marketScore, "日本")}${big("セクタースコア", r.sectorScore, esc(r.sector))}
-      ${big("銘柄スコア", r.score, "")}${big("エントリータイミング", r.entry, esc(A.entry))}${big("リスク(高=安全)", r.risk, "集中リスクは除外")}</div>
+      ${big("銘柄スコア", r.score, "")}${big("選別スコア（検証版）", r.sel, "長期強い×直近押し")}${big("エントリータイミング", r.entry, esc(A.entry))}${big("リスク(高=安全)", r.risk, "集中リスクは除外")}</div>
     <p class="note">3つのスコア（市場・セクター・銘柄）は独立して表示しています。総合評価は初期設定の重みで合成した参考値です。</p></div>
 
   <div class="card"><h2>評価</h2><div class="grid2"><div class="kv">
@@ -773,9 +794,12 @@ async function loadStock(code) {
     <div id="stkChart" style="width:100%;height:1150px"></div>
     <p class="note">上から：ローソク足＋移動平均／出来高(千株)／MACD／RSI(14)／ADX(14)と±DI／ATR(14)／TOPIXとの相対強度（開始=100、右肩上がり＝TOPIXより強い）。陽線＝赤、陰線＝青。</p></div>
 
+  ${heatCard(r)}
+
   <div class="card"><h2>スコアの内訳（計算根拠）</h2><div class="grid2">
     <div><b>銘柄スコア ${r.score}</b>${compBars(r.comps)}</div><div><b>エントリータイミング ${r.entry ?? ND}</b>${compBars(r.entryComps)}</div>
-    <div><b>リスク ${r.risk ?? ND}</b>${compBars(r.riskComps)}</div></div>
+    <div><b>リスク ${r.risk ?? ND}</b>${compBars(r.riskComps)}</div>
+    <div><b>選別スコア（検証版） ${r.sel ?? ND}</b>${selBars(r)}<div class="note">3要素の順位（その日の代表銘柄の中での位置）の平均。10年の検証で、高スコアほどその後の成績が良い傾向（帯別）。詳しくは「検証」画面。</div></div></div>
     <details><summary class="note">各要素の計算方法</summary><div class="note">
       <b>トレンド(30)</b>：終値>25/75/200日線、25>75日線、75>200日線、25日線が上向き の平均(50%)＋75日線乖離の自分の過去250日順位(30%)＋ADX（上昇方向のみ）(20%)<br>
       <b>モメンタム(25)</b>：20日・60日騰落率、MACDヒストグラム/株価の、それぞれ自分の過去250日順位（40/30/30%）<br>
@@ -1085,6 +1109,7 @@ function renderBT() {
   <div class="card"><h2>結果の要点（数字から自動で作った文章）</h2>
     <p style="margin:6px 0">20営業日後の平均リターン（コスト後）：個別銘柄スコア <b>70以上は ${sg(top.h20.mean)}%</b>、<b>30未満は ${sg(bot.h20.mean)}%</b>、代表銘柄の全体平均は <b>${sg(uni20)}%</b>。<br>
     ${verdict}${icS ? `（日々の順位相関IC＝${sg(icS.mean, 3)}、t=${icS.t}。0より大きくt≥2なら「高スコアが有利」、0より小さくt≤-2なら「逆」の目安）` : ""}</p>
+    ${B.selBands ? (() => { const a = B.selBands[B.selBands.length - 1].h20, z = B.selBands[0].h20; return `<p style="margin:6px 0"><b>選別スコア（検証版）</b>：20営業日後の平均は、<b>80以上 ${sg(a.mean)}%</b>（全銘柄平均との差 ${sg(a.exUni)}%）、<b>20未満 ${sg(z.mean)}%</b>（差 ${sg(z.exUni)}%）。高スコアほどその後の成績が良い方向ですが、差は小さく、売買コスト込みの運用で全銘柄の平均を上回るほどではありません。</p>`; })() : ""}
     <p class="note">結果がスコアの設計に合わない場合は、配点や要素を見直す材料にします（下の「要素別の有効性」で、どの要素が効いた／効かなかったかを確認できます）。</p></div>
 
   <div class="card"><h2>累積リターンの比較</h2>
@@ -1095,9 +1120,10 @@ function renderBT() {
 
   <div class="card"><h2>スコア帯別の成績（シグナル翌日終値で買い、N営業日後に売った場合）</h2>
     <div class="ctrl" style="margin-bottom:6px"><span class="note">対象：</span>
-      ${[["stock", "個別銘柄スコア"], ["entry", "エントリータイミング"], ["risk", "リスク（高=安全）"], ["types", "3分類"]].map(([k, t]) => `<button class="mini per ${btKind === k ? "on" : ""}" data-bk="${k}">${t}</button>`).join(" ")}
+      ${[["stock", "個別銘柄スコア"], ["sel", "選別スコア（検証版）"], ["heat", "過熱・売られすぎ"], ["candle", "ローソク足"], ["entry", "エントリータイミング"], ["risk", "リスク（高=安全）"], ["types", "3分類"]].map(([k, t]) => `<button class="mini per ${btKind === k ? "on" : ""}" data-bk="${k}">${t}</button>`).join(" ")}
       <span class="note">　保有日数：</span>${[5, 10, 20].map(n => `<button class="mini per ${btH === n ? "on" : ""}" data-bh="${n}">${n}日</button>`).join(" ")}</div>
     <div id="btTable"></div>
+    <div id="btKindNote" class="note"></div>
     <details><summary class="note">列の見方・計算方法</summary><div class="note">
       平均リターン＝（N営業日後の終値÷買値−1）から往復コスト${A.roundTrip.toFixed(2)}%（手数料${(A.feeSide * 2).toFixed(2)}%＋スリッページ${(A.slipSide * 2).toFixed(2)}%）を引いた平均。勝率＝コスト後にプラスだった割合。<br>
       平均利益・平均損失＝勝った／負けた取引の平均。損益比＝平均利益÷平均損失の絶対値。下位5%の損失＝悪いほうから5%目の取引の損失（悪い場合の目安）。<br>
@@ -1120,7 +1146,12 @@ function renderBT() {
     <p class="note"><b>読み方</b>：全期間を半分に分け、各配点案が「前半でも後半でも」同じ向きに効いたかを見ます。20日後・コスト後のリターンで、上位20%−下位20%は「スコア上位の銘柄の成績−下位の銘柄の成績」です。<br>
     <b>結果</b>：${flips >= V.rows.length / 3 ? `順張り系の配点案（トレンド・モメンタム・相対強度など）は、<b>前半は逆効果、後半は有効</b>と、期間で向きが逆転しました（${flips}案）。配点の組み替えでは解消せず、相場環境（順張りが有利か、逆張りが有利か）に左右されていると考えられます。` : "期間による向きの逆転は限定的でした。"}
     ${both.length ? `前半・後半の<b>どちらでも</b>逆効果だった案：${both.map(esc).join("、")}。` : ""}<br>
-    <b>方針</b>：検証期間が約5年・銘柄が現在の代表銘柄のみで、相場環境の変化に配点が追いつかないため、この結果に合わせて配点を変更すると<b>過去への当てはめ（過学習）</b>になります。そのため、現在の配点は変更せず（初期仮説のまま）、期間・銘柄を増やして再検証するまで保留としています。</p></div>`; })()}
+    <b>方針</b>：検証期間が約5年・銘柄が現在の代表銘柄のみで、相場環境の変化に配点が追いつかないため、この結果に合わせて配点を変更すると<b>過去への当てはめ（過学習）</b>になります。そのため、現在の個別銘柄スコアの配点は変更していません（初期仮説のまま）。代わりに、約10年の検証で<b>前半・後半の両方でプラスだった要素</b>（長期モメンタム、20日の押し、75日線の押し）を、別スコア「選別スコア（検証版）」として並べています。上の「【新】」の行がその検証です。</p></div>`; })()}
+
+  ${B.regime ? `<div class="card"><h2>相場局面別の効き方（TOPIXが200日線の上／下）</h2>
+    <div class="scroll"><table><thead><tr><th class="name">スコア</th><th>TOPIXが200日線の上<br><small>IC（日数）</small></th><th>TOPIXが200日線の下<br><small>IC（日数）</small></th></tr></thead><tbody>
+      ${B.regime.map(r => `<tr><td class="name">${esc(r.label)}</td><td class="num ${pcCls(r.icUp)}">${sg(r.icUp, 3)}<small class="meta">　${r.nUp.toLocaleString()}日</small></td><td class="num ${pcCls(r.icDown)}">${sg(r.icDown, 3)}<small class="meta">　${r.nDown.toLocaleString()}日</small></td></tr>`).join("")}</tbody></table></div>
+    <p class="note">局面は、その日までの価格だけで判定しています（先読みなし）。現行の銘柄スコア（トレンド追随型）は、相場が200日線を下回る局面で特に逆効果（下落後の反発で、弱かった銘柄が上がる）。選別スコアは、その局面でプラスに働きました。局面の数が少ない（相場の下落局面は数回）ため、確定的な結論ではありません。</p></div>` : ""}
 
   <div class="card"><h2>年ごとの安定性（20日後・コスト後の平均リターン）</h2>
     <div class="scroll"><table><thead><tr><th>年</th><th>スコア60以上</th><th>スコア40未満</th><th>代表銘柄の全体</th></tr></thead><tbody>
@@ -1134,8 +1165,14 @@ function renderBT() {
 
   const refresh = () => {
     const t = document.getElementById("btTable");
-    t.innerHTML = btKind === "stock" ? btRows(B.stockBands, btBandLabel) : btKind === "entry" ? btRows(B.entryBands, btBandLabel)
+    t.innerHTML = btKind === "stock" ? btRows(B.stockBands, btBandLabel) : btKind === "sel" ? btRows(B.selBands, btBandLabel) : btKind === "heat" ? btRows(B.heatRows, r => r.label) : btKind === "candle" ? btRows(B.candleRows, r => r.label) : btKind === "entry" ? btRows(B.entryBands, btBandLabel)
       : btKind === "risk" ? btRows(B.riskBands, btBandLabel) : btRows(B.types, r => r.label);
+    const nt = document.getElementById("btKindNote"), pick = l => (B.heatRows || []).find(r => r.label === l), h = r => r && r["h" + btH];
+    if (btKind === "heat") { const a = pick("売られすぎが2個以上点灯"), b = pick("買われすぎが2個以上点灯");
+      nt.innerHTML = a && b ? `<b>読み方</b>：${btH}営業日後の平均は、売られすぎが2個以上のとき ${sg(h(a).mean)}%、買われすぎが2個以上のとき ${sg(h(b).mean)}%。売られすぎが多い局面のほうが、その後の平均は高い傾向です（市場全体の下落後の反発を含みます）。「全銘柄平均比」は、同じ日の全銘柄平均との差で、売買コスト（約${A.roundTrip.toFixed(2)}%）を含みます。コスト分を除いた差は、売られすぎ2個以上が${sg(h(a).exUni + A.roundTrip)}%、買われすぎ2個以上が${sg(h(b).exUni + A.roundTrip)}%と小さく、<b>個別銘柄の選別力は限定的</b>で、主に市場全体の過熱感・売られすぎ感を見る材料です。` : ""; }
+    else if (btKind === "candle") { const rs = B.candleRows || [], v = rs.map(r => h(r).exUni + A.roundTrip).filter(x => x !== null && !isNaN(x));
+      nt.innerHTML = v.length ? `<b>読み方</b>：コスト分を除いた「全銘柄平均との差」は、全パターンで ${sg(Math.min(...v))}%〜${sg(Math.max(...v))}%と、ほぼゼロです。買い系・売り系のどちらも、その後の成績に明確な差は見られませんでした。ローソク足は<b>参考表示</b>にとどめるのが妥当です。` : ""; }
+    else nt.innerHTML = "";
     box.querySelectorAll("[data-bk]").forEach(b => b.classList.toggle("on", b.dataset.bk === btKind));
     box.querySelectorAll("[data-bh]").forEach(b => b.classList.toggle("on", +b.dataset.bh === btH));
   };
