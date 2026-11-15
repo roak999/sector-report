@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from indicators import macd
+from indicators import CANDLE_HELP, candle_patterns, macd
 from names import NAMES
 from scoring import clip01, num, prank, weighted_score
 
@@ -128,6 +128,94 @@ def components(f: dict) -> dict:
     return {"stock": {"trend": trend, "momentum": momentum, "volume": volume}, "entry": entry, "risk": risk, "extra": extra}
 
 
+# ---------- 選別スコア（検証版）：10年の検証で、前半・後半の両方で順位相関がプラスだった3要素 ----------
+# 「長期（12か月−直近1か月）は強い」×「直近は押している（20日・75日線に対して）」銘柄を高く評価する。
+# 現行の個別銘柄スコア（トレンド・モメンタム等）は10年検証で高スコアが有利とは言えなかったため、別スコアとして並べる。
+L_SEL = {"mom": "長期モメンタム（12か月−直近1か月の騰落率）", "rev20": "20日の押し（20日騰落率が低いほど高い）", "dev75": "75日線からの押し（75日線乖離が低いほど高い）"}
+
+
+def sel_scores(CP: pd.DataFrame):
+    """CP: 日付×銘柄の終値（取引日カレンダーに揃え、補完しない）。戻り値: (0〜100のスコア, 要素のパーセンタイル順位, 生の値)
+    すべてその日までのデータと、同じ日の銘柄間の順位だけで計算する（先読みなし）"""
+    raw = {"mom": CP.shift(20) / CP.shift(250) - 1, "rev20": CP / CP.shift(20) - 1, "dev75": CP / CP.rolling(75).mean() - 1}
+    comp = {"mom": raw["mom"].rank(axis=1, pct=True), "rev20": (-raw["rev20"]).rank(axis=1, pct=True),
+            "dev75": (-raw["dev75"]).rank(axis=1, pct=True)}
+    ok = comp["mom"].notna() & comp["rev20"].notna() & comp["dev75"].notna()
+    score = ((comp["mom"] + comp["rev20"] + comp["dev75"]) / 3 * 100).where(ok)
+    return score, comp, raw
+
+# ---------- 過熱・売られすぎ（参考）と ローソク足シグナル ----------
+# 各指標を「買われすぎ(+1)／中立(0)／売られすぎ(-1)」に分け、点灯した数を数える。基準値は初期の仮説で、
+# 検証画面で「点灯数が多いほど、その後どうなったか」を確かめる（売買の合図ではなく、過熱感を見る参考情報）。
+HEAT_ITEMS = [
+    ("psy", "サイコロジカル（12日）", "12日中9日以上上昇＝買われすぎ／3日以下＝売られすぎ"),
+    ("rsi", "RSI（14日）", "70以上＝買われすぎ／30以下＝売られすぎ"),
+    ("dev25", "25日線からの乖離", "自分の過去250日で上位10%＝買われすぎ／下位10%＝売られすぎ"),
+    ("bb", "ボリンジャーバンド（20日±2σ）", "上限を超える＝買われすぎ／下限を割る＝売られすぎ"),
+    ("macd", "MACD（株価比）", "自分の過去250日で上位10%＝買われすぎ／下位10%＝売られすぎ"),
+    ("vol", "出来高を伴う急変", "出来高が20日平均の2倍以上で、当日+3%以上＝過熱／−3%以下＝投げ売り（売られすぎ）"),
+]
+CANDLE_KIND = {"陽の包み足": 1, "赤三兵": 1, "ハンマー": 1, "陰の包み足": -1, "黒三兵": -1, "上ヒゲ": -1}
+
+
+def heat_levels(f: dict, extra: dict) -> dict:
+    """名前 → 日次の水準（+1 買われすぎ / 0 中立 / -1 売られすぎ / 欠損）。その日までのデータだけで計算する"""
+    c = f["c"]
+    lv = lambda hi, lo, base: pd.Series(np.where(hi, 1.0, np.where(lo, -1.0, 0.0)), index=c.index).where(base.notna())
+    up_ratio = (c.diff() > 0).astype(float).rolling(12).mean().where(c.diff().notna())
+    p_dev, mm = prank(extra["dev25"]), f["macd"] / c
+    p_macd = prank(mm)
+    bw = (f["bbu"] - f["bbl"]).replace(0, np.nan)
+    pb = (c - f["bbl"]) / bw
+    ret1, vd = c.pct_change(), extra["vd"]
+    return {
+        "psy": lv(up_ratio >= 9 / 12 - 1e-9, up_ratio <= 3 / 12 + 1e-9, up_ratio),
+        "rsi": lv(f["rsi"] >= 70, f["rsi"] <= 30, f["rsi"]),
+        "dev25": lv(p_dev >= 0.9, p_dev <= 0.1, p_dev),
+        "bb": lv(pb >= 1.0, pb <= 0.0, pb),
+        "macd": lv(p_macd >= 0.9, p_macd <= 0.1, p_macd),
+        "vol": lv((vd >= 2) & (ret1 >= 0.03), (vd >= 2) & (ret1 <= -0.03), vd),
+    }
+
+
+def heat_row(f: dict, extra: dict, i: int) -> dict:
+    """最新日の過熱・売られすぎの表示用データ"""
+    L = heat_levels(f, extra)
+    c, r = f["c"], f["rsi"]
+    up12 = int((c.diff() > 0).astype(float).rolling(12).sum().iloc[i]) if i >= 12 else None
+    pb = ((c - f["bbl"]) / (f["bbu"] - f["bbl"]).replace(0, np.nan)).iloc[i]
+    pdv, pmc = prank(extra["dev25"]).iloc[i], prank(f["macd"] / c).iloc[i]
+    vals = {
+        "psy": None if up12 is None else f"12日中{up12}日上昇",
+        "rsi": None if pd.isna(r.iloc[i]) else f"{r.iloc[i]:.0f}",
+        "dev25": None if pd.isna(extra["dev25"].iloc[i]) else f"{extra['dev25'].iloc[i] * 100:+.1f}%（過去250日で上位{(1 - pdv) * 100:.0f}%）" if pd.notna(pdv) else f"{extra['dev25'].iloc[i] * 100:+.1f}%",
+        "bb": None if pd.isna(pb) else f"位置 {pb * 100:.0f}%（0=下限・100=上限）",
+        "macd": None if pd.isna(pmc) else f"過去250日で上位{(1 - pmc) * 100:.0f}%",
+        "vol": None if pd.isna(extra["vd"].iloc[i]) else f"出来高{extra['vd'].iloc[i]:.1f}倍・当日{(c.pct_change().iloc[i]) * 100:+.1f}%",
+    }
+    items, os_, ob = [], 0, 0
+    for k, label, rule in HEAT_ITEMS:
+        v = L[k].iloc[i]
+        lev = None if pd.isna(v) else int(v)
+        os_ += lev == -1
+        ob += lev == 1
+        items.append({"key": k, "label": label, "rule": rule, "value": vals[k], "level": lev})
+    return {"items": items, "os": int(os_), "ob": int(ob)}
+
+
+def candle_recent(f: dict, i: int, n: int = 5) -> list:
+    """直近n日に出たローソク足パターン（新しい順）。{name, daysAgo, kind(+1買い系/-1売り系), help}"""
+    pats = candle_patterns(f["o"], f["h"], f["l"], f["c"])
+    out = []
+    for back in range(n):
+        j = i - back
+        if j < 0:
+            break
+        for name, ser in pats.items():
+            if bool(ser.iloc[j]):
+                out.append({"name": name, "daysAgo": back, "kind": CANDLE_KIND[name], "help": CANDLE_HELP[name]})
+    return out
+
 # ---------- 判定の文言 ----------
 
 def grade(x):
@@ -204,6 +292,9 @@ def analyze(prices: dict, targets: list, topix: pd.Series, sector_scores: dict, 
         if s and s != "未分類" and len(ts) >= 4:      # 4社未満のセクターは比較しない（データなし）
             sec_rank[ts] = B[ts].rank(axis=1, pct=True)
 
+    CP = pd.DataFrame({t: feats[t]["c"].reindex(cal) for t, _, _ in used})
+    SEL, SELC, SELR = sel_scores(CP)
+
     rows, detail = [], {}
     for t, name, sector in used:
         f, cp = feats[t], comps[t]
@@ -272,6 +363,10 @@ def analyze(prices: dict, targets: list, topix: pd.Series, sector_scores: dict, 
             "dev25": num(ex["dev25"].iloc[i] * 100, 1), "atrPct": num(ex["atrp"].iloc[i] * 100, 2),
             "entry": num(e_score.iloc[i], 0), "risk": num(r_score.iloc[i], 0), "riskCov": num(r_cov.iloc[i], 2),
             "stop": lv["stop"] if lv else None, "target": lv["target"] if lv else None, "rr": lv["rr"] if lv else None,
+            "sel": num(SEL[t].iloc[j], 0) if j >= 0 else None,
+            "selComps": [{"key": k, "label": L_SEL[k], "ratio": num(SELC[k][t].iloc[j], 3) if j >= 0 else None,
+                          "raw": num(SELR[k][t].iloc[j] * 100, 1) if j >= 0 and pd.notna(SELR[k][t].iloc[j]) else None} for k in L_SEL],
+            "heat": heat_row(f, ex, i), "candles": candle_recent(f, i),
             "tags": tags, "comps": stock_c, "entryComps": entry_c, "riskComps": risk_c,
             "inUniverse": True,
         }

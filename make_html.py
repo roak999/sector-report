@@ -188,13 +188,13 @@ def build_payload(groups: list, weights: dict, volume_mode: str, private: bool =
         print(f"個別銘柄の分析に失敗: {e!r}")
     stock_missing = sorted(set(stock_missing) | {t for t, _, _ in watch if t in failed})
 
-    # ---- バックテスト（過去6年。代表銘柄のみ。登録銘柄・非公開銘柄は検証に含めない） ----
+    # ---- バックテスト（過去約10年。代表銘柄のみ。登録銘柄・非公開銘柄は検証に含めない） ----
     backtest_payload = None
     try:
         from backtest import build_backtest
         if universe and TOPIX_PROXY in prices:
             bt_tickers = sorted(set(jp_flat) | {TOPIX_PROXY, MARKET_INDEX})
-            bt_prices, _ = data.load_prices_ex(bt_tickers, period="6y")
+            bt_prices, _ = data.load_prices_ex(bt_tickers, period="11y")
             backtest_payload = build_backtest(
                 bt_prices, universe, bt_prices[TOPIX_PROXY]["Close"],
                 bt_prices[MARKET_INDEX]["Close"] if MARKET_INDEX in bt_prices else None)
