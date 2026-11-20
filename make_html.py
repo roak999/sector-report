@@ -113,7 +113,8 @@ def build_group(group: str, items: dict, prices: dict, weights: dict, volume_mod
     return {"name": group, "sorted": sorted_, "today": today, "history": history}, detail
 
 
-def build_payload(groups: list, weights: dict, volume_mode: str, private: bool = False) -> dict:
+def build_payload(groups: list, weights: dict, volume_mode: str, private: bool = False,
+                  record_history: bool = False) -> dict:
     all_items = {}
     for g in groups:
         all_items.update(REGIONS[g])
@@ -188,6 +189,26 @@ def build_payload(groups: list, weights: dict, volume_mode: str, private: bool =
         print(f"個別銘柄の分析に失敗: {e!r}")
     stock_missing = sorted(set(stock_missing) | {t for t, _, _ in watch if t in failed})
 
+    # ---- ウォッチ（注目銘柄の記録と追跡）。記録は公開ビルド（Actions か --record-history）のときだけ ----
+    watch_payload = None
+    try:
+        import os
+        import watch_history as WH
+        hist = WH.load_history()
+        if stock_rows and not private and (record_history or os.environ.get("GITHUB_ACTIONS") == "true") \
+                and TOPIX_PROXY in prices:
+            day = prices[TOPIX_PROXY].dropna(subset=["Close"]).index.max().strftime("%Y-%m-%d")
+            if WH.record(hist, day, WH.make_picks(stock_rows), "live"):
+                WH.save_history(hist)
+                print(f"注目銘柄を記録しました: {day}")
+        if TOPIX_PROXY in prices:
+            nm = {**{k: v for k, v in NAMES.items()}, **{r["code"]: r["name"] for r in stock_rows}}
+            sc = {r["code"]: r["sector"] for r in stock_rows}
+            watch_payload = WH.build_watch(hist, prices, prices[TOPIX_PROXY]["Close"], nm, sc, jp_flat)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"ウォッチの処理に失敗: {e!r}")
+
     # ---- バックテスト（過去約10年。代表銘柄のみ。登録銘柄・非公開銘柄は検証に含めない） ----
     backtest_payload = None
     try:
@@ -212,7 +233,7 @@ def build_payload(groups: list, weights: dict, volume_mode: str, private: bool =
     return {
         "markets": markets, "marketOrder": list(MARKETS), "world": world,
         "marketDefaults": {k: c["default_on"] for k, c in MARKETS.items()},
-        "sectorPlus": sector_payload, "quality": quality, "backtest": backtest_payload,
+        "sectorPlus": sector_payload, "quality": quality, "backtest": backtest_payload, "watch": watch_payload,
         "stocks": stock_rows, "stockMissing": stock_missing, "_stockDetail": stock_detail,
         "types": TYPES, "stockWeights": {"stock": W_STOCK, "entry": W_ENTRY, "risk": W_RISK, "total": W_TOTAL},
         "generated": datetime.now(jst).strftime("%Y-%m-%d %H:%M") + (" 【非公開版・公開禁止】" if private else ""),
@@ -233,9 +254,11 @@ def main():
     ap.add_argument("--volume", default="構成銘柄の売買代金合計",
                     choices=["構成銘柄の売買代金合計", "ETF自体の出来高"])
     ap.add_argument("--private", action="store_true", help="watchlist_private.txt も分析対象に含める（ローカル専用。出力を公開しないこと）")
+    ap.add_argument("--record-history", action="store_true",
+                    help="注目銘柄を history/picks.json に記録する（GitHub Actions では自動。ローカルでは通常不要）")
     args = ap.parse_args()
 
-    payload = build_payload(args.groups, DEFAULT_WEIGHTS, args.volume, args.private)
+    payload = build_payload(args.groups, DEFAULT_WEIGHTS, args.volume, args.private, args.record_history)
     # 個別銘柄のチャート用データは、表示速度のため銘柄ごとの別JSONにして必要なときだけ読み込む
     detail = payload.pop("_stockDetail", {})
     data_dir = Path(args.out).parent / "data"

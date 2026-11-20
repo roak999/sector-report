@@ -124,6 +124,7 @@
   <button data-menu="sector">セクター</button>
   <button data-menu="screen">スクリーニング</button>
   <button data-menu="stock">個別銘柄</button>
+  <button data-menu="watch">ウォッチ</button>
   <button data-menu="pf">ポートフォリオ</button>
   <button data-menu="bt">検証</button>
 </nav>
@@ -137,6 +138,7 @@
   <section id="market" class="on"><div id="marketBody"></div></section>
   <section id="screen"><div id="screenBody"></div></section>
   <section id="stock"><div id="stockBody"></div></section>
+  <section id="watch"><div id="watchBody"></div></section>
   <section id="pf"><div id="pfBody"></div></section>
   <section id="bt"><div id="btBody"></div></section>
   <section id="soon"><div class="card"><h2 id="soonTitle"></h2>
@@ -260,13 +262,14 @@ function showMenu(m) {
   if (m === "sector") return showTab(curSub);
   document.querySelectorAll("#menus button").forEach(x => x.classList.toggle("on", x.dataset.menu === m));
   document.getElementById("subnav").style.display = "none";
-  const id = ({ market: "market", screen: "screen", stock: "stock", pf: "pf", bt: "bt" })[m] || "soon";
+  const id = ({ market: "market", screen: "screen", stock: "stock", watch: "watch", pf: "pf", bt: "bt" })[m] || "soon";
   if (SOON[m]) { document.getElementById("soonTitle").textContent = SOON[m][0] + "（準備中）"; document.getElementById("soonText").textContent = SOON[m][1]; }
   document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id === id));
   window.scrollTo({ top: 0 });
   if (m === "market") drawMarketCharts();
   if (m === "pf") drawPFCharts();
   if (m === "bt") drawBT();
+  if (m === "watch") renderWatch();
   if (m === "stock") { const e = document.getElementById("stkChart"); if (e && e.data && typeof Plotly !== "undefined") Plotly.Plots.resize(e); }   // 非表示のうちに描いたチャートの幅を直す
 }
 
@@ -285,11 +288,24 @@ function heatCard(r) {
   const H = r.heat; if (!H) return "";
   const cs = (r.candles || []).map(c => `<span class="pill" style="background:${c.kind > 0 ? "#c0392b" : "#1f618d"};cursor:help" title="${esc(c.help)}">${esc(c.name)}（${c.daysAgo === 0 ? "当日" : c.daysAgo + "日前"}・${c.kind > 0 ? "買い系" : "売り系"}）</span>`).join(" ");
   return `<div class="card"><h2>過熱・売られすぎ（参考） <small class="meta">　売られすぎ ${H.os}個／買われすぎ ${H.ob}個が点灯（6指標中）</small></h2>
+    <p style="margin:6px 0"><b>ひとことで：</b>${H.ob >= 2 && H.os === 0 ? "上がりすぎのサインが複数出ています（過熱気味）。" : H.os >= 2 && H.ob === 0 ? "下がりすぎのサインが複数出ています（売られすぎ気味）。" : H.os === 0 && H.ob === 0 ? "過熱・売られすぎのサインは出ていません（中立）。" : "上がりすぎ・下がりすぎのサインが混在しています（はっきりしません）。"}
+      <small class="meta">（6つの指標が、いまどちら側に振れているかを数えたものです）</small></p>
     <div class="scroll"><table><thead><tr><th class="name">指標</th><th>現在の値</th><th>判定</th><th class="name">判定の基準</th></tr></thead><tbody>
       ${H.items.map(i => `<tr><td class="name">${esc(i.label)}</td><td>${i.value === null ? ND : esc(i.value)}</td><td>${heatBadge(i.level)}</td><td class="name"><small class="meta">${esc(i.rule)}</small></td></tr>`).join("")}</tbody></table></div>
     <div style="margin-top:8px"><b>直近5日のローソク足シグナル：</b>${cs || "<span class=\"note\">特になし</span>"}</div>
     <p class="note">売買の合図ではなく、過熱感を見る参考情報です。トレンドが強いときは、買われすぎがさらに続くこともあります。基準値は初期の仮説で、「検証」画面で、点灯数別・指標別・ローソク足別に、その後の成績を確かめています（ローソク足は、検証では差がほぼ見られませんでした）。</p></div>`;
 }
+// 一覧用：過熱感（点灯数を言葉で）とローソク足シグナル
+function heatCell(r) {
+  const H = r && r.heat; if (!H) return "-";
+  const p = (bg, t) => `<span class="pill" style="background:${bg}">${t}</span>`;
+  return (H.os ? p("#1f618d", `売られすぎ${H.os}`) + " " : "") + (H.ob ? p("#c0392b", `買われすぎ${H.ob}`) : "") || `<span class="meta">なし</span>`;
+}
+function candleCell(r) {
+  const cs = r && r.candles; if (!r || !cs) return "-";
+  return cs.length ? cs.slice(0, 2).map(c => `<span class="pill" style="background:${c.kind > 0 ? "#c0392b" : "#1f618d"};cursor:help" title="${esc(c.help)}">${esc(c.name)}${c.daysAgo === 0 ? "" : "(" + c.daysAgo + "日前)"}</span>`).join(" ") : `<span class="meta">なし</span>`;
+}
+const HEAT_NOTE = `<b>過熱感の見方</b>：6つの指標（サイコロ・RSI・25日線乖離・ボリンジャー・MACD・出来高）のうち、<span class="pill" style="background:#c0392b">買われすぎ</span>は「上がりすぎのサインが点灯した数」、<span class="pill" style="background:#1f618d">売られすぎ</span>は「下がりすぎのサインが点灯した数」です（「なし」は点灯ゼロ）。2個以上で目立つ状態です。ローソク足は直近の形（赤＝買い系、青＝売り系、名前にカーソルで説明）。どちらも売買の合図ではなく参考情報で、検証ではどちらも個別銘柄の選別力は限定的でした。`;
 function selBars(r) {
   return (r.selComps || []).map(c => `<div>${esc(c.label)}　<b>${c.ratio === null ? ND : Math.round(c.ratio * 100) + " / 100"}</b><small class="meta">　実測 ${pc(c.raw)}</small>
     <div class="bar"><i style="width:${c.ratio === null ? 0 : c.ratio * 100}%;background:${score100Color(c.ratio === null ? null : c.ratio * 100)}"></i></div></div>`).join("");
@@ -672,7 +688,7 @@ function renderScreen() {
     <div id="scrCount" class="note"></div>
     <div class="scroll"><table id="scrTable"></table></div>
     <p class="note">行をタップすると各スコアの内訳が開き、銘柄名をタップすると個別銘柄分析に移ります。RS＝TOPIX（1306）に対する20日の超過収益。出来高増加率＝直近5日平均÷その前20日平均−1。
-    タイミング＝エントリータイミングスコア、安全度＝リスクスコア（高いほど安全。セクター集中リスクは第4段階で加わるため現状は除外して再計算）。</p>
+    タイミング＝エントリータイミングスコア、安全度＝リスクスコア（高いほど安全。セクター集中リスクは第4段階で加わるため現状は除外して再計算）。<br>${HEAT_NOTE}</p>
     <div class="warn">銘柄の登録：リポジトリの <b>watchlist.txt</b> に証券コードを1行1銘柄で追記し、make_html.py（またはGitHub Actionsの手動実行）を実行すると反映されます。
     ブラウザの画面だけでは新しい銘柄の株価データを取得できないため、この方式にしています。${D.stockMissing && D.stockMissing.length ? `<br>データ不足・取得不可で分析できなかった銘柄：${D.stockMissing.map(esc).join("、")}` : ""}</div></div>`;
   const g = id => document.getElementById(id);
@@ -715,7 +731,7 @@ function drawScreenTable() {
     h += `<tr class="click" data-c="${r.code}"><td class="name">${r.watch ? "★" : ""}${esc(r.name)}<small>${r.code}</small></td>
       <td>${esc(r.sector)}</td><td class="num">${nz(r.price, 0)}</td><td class="num ${pcCls(r.chg1)}">${pc(r.chg1)}</td>${sc(r.total)}${sc(r.score)}${sc(r.sel)}
       <td class="num ${pcCls(r.rs20)}">${pc(r.rs20)}</td><td class="num ${pcCls(r.volInc)}">${r.volInc === null ? ND : pc(r.volInc, 0)}</td>${sc(r.entry)}${sc(r.risk)}
-      <td>${r.heat ? (r.heat.os ? `<span class="pill" style="background:#1f618d">売${r.heat.os}</span> ` : "") + (r.heat.ob ? `<span class="pill" style="background:#c0392b">買${r.heat.ob}</span>` : "") || "-" : "-"}</td>
+      <td>${heatCell(r)}</td>
       <td>${r.tags.map(t => ["", "①", "②", "③"][t]).join("") || "-"}</td></tr>
       <tr class="exp" id="sx_${r.code}" style="display:none"><td colspan="13"><div class="grid2">
         <div><b>個別銘柄スコア ${r.score}</b>　（総合 ${r.total} ＝ 市場${r.marketScore ?? ND}×0.2 ＋ セクター${r.sectorScore ?? ND}×0.3 ＋ 銘柄${r.score}×0.5）${compBars(r.comps)}</div>
@@ -977,14 +993,15 @@ function renderPF() {
       ${prev ? `前回表示時（データ更新 ${esc(prevGen || "")}）との比較も含めています。` : "前回との比較は、データが更新された後にこの画面を開くと使えます。"}
       通知はこの画面を開いたときに表示されます（メールやプッシュ通知は送りません）。売却を推奨するものではなく、見直しのきっかけとしての参考情報です。</div></details></div>
 
-  <div class="card"><h2>保有一覧</h2><div class="scroll"><table><thead><tr><th class="name">銘柄</th><th>株数</th><th>平均取得</th><th>現在価格</th><th>評価額</th><th>評価損益</th><th>損益率</th><th>セクター</th><th>総合</th><th>銘柄</th><th>タイミング</th><th>リスク</th><th></th></tr></thead><tbody>
+  <div class="card"><h2>保有一覧</h2><div class="scroll"><table><thead><tr><th class="name">銘柄</th><th>株数</th><th>平均取得</th><th>現在価格</th><th>評価額</th><th>評価損益</th><th>損益率</th><th>セクター</th><th>総合</th><th>銘柄</th><th>タイミング</th><th>リスク</th><th>過熱感</th><th>ローソク足<br><small>直近5日</small></th><th></th></tr></thead><tbody>
     ${rows.map(x => `<tr><td class="name"><a class="gostock" data-c="${x.h.code}" style="cursor:pointer">${esc(x.name)}</a><small>${x.h.code}</small></td>
       <td class="num">${nz(x.h.shares, 0)}</td><td class="num">${nz(x.h.cost, 1)}</td><td class="num">${x.price === null ? ND : nz(x.price, 0)}</td>
       <td class="num">${x.value === null ? ND : nz(x.value, 0)}</td><td class="num ${pcCls(x.pl)}">${x.pl === null ? ND : (x.pl > 0 ? "+" : "") + nz(x.pl, 0)}</td>
       <td class="num ${pcCls(x.plPct)}">${x.plPct === null ? ND : pc(x.plPct, 2)}</td><td>${esc(x.sector)}</td>
       ${[x.r && x.r.total, x.r && x.r.score, x.r && x.r.entry, x.risk].map(v => `<td style="background:${score100Color(v ?? null)};color:${fg100(v ?? null)};font-weight:700">${v ?? "-"}</td>`).join("")}
+      <td>${heatCell(x.r)}</td><td>${candleCell(x.r)}</td>
       <td><button class="mini pf_del" data-c="${x.h.code}">削除</button> <button class="mini pf_edit" data-c="${x.h.code}">編集</button></td></tr>`).join("")}</tbody></table></div>
-    <p class="note">総合・銘柄・タイミングは個別銘柄分析と同じスコア。リスクは、セクター集中リスク（保有比率で計算）を加えて再計算した値（高いほど安全）。</p></div>
+    <p class="note">総合・銘柄・タイミングは個別銘柄分析と同じスコア。リスクは、セクター集中リスク（保有比率で計算）を加えて再計算した値（高いほど安全）。<br>${HEAT_NOTE}</p></div>
 
   <div class="card"><h2>資産配分</h2><div class="grid2"><div><b style="font-size:12px;color:var(--sub)">セクター別</b><div id="pfSec" style="height:300px"></div></div>
     <div><b style="font-size:12px;color:var(--sub)">銘柄別</b><div id="pfStk" style="height:300px"></div></div></div>
@@ -1106,6 +1123,13 @@ function renderBT() {
       ・<b>観測が重なっています</b>：毎日のシグナルは保有期間が重なるため、観測数ほどの独立した証拠はありません（t値などは目安）。期間は約${(P.days / 245).toFixed(1)}年で、相場環境が偏っている可能性があります。<br>
       ・配点（30/25/20…）は<b>初期仮説</b>で、この結果を見て見直すためのものです。過去の成績は将来を保証せず、売買の推奨ではありません。</div></div>
 
+  <div class="card"><h2>この画面で見ているもの（はじめに）</h2>
+    <p style="margin:6px 0"><b>対象</b>：このアプリの代表${P.stocks}銘柄。「個別銘柄」画面などに出ている各スコア・サイン（個別銘柄スコア、選別スコア、過熱・売られすぎ、ローソク足、エントリータイミング、リスク、3分類）が対象です。<b>あなたの保有銘柄や、今日の相場の予想ではありません。</b></p>
+    <p style="margin:6px 0"><b>やっていること</b>：過去約${(P.days / 245).toFixed(0)}年の毎日について、「その日のスコアが○○だった銘柄を、<u>翌営業日の終値で買って</u>、5・10・20営業日後に売っていたら、いくら増減したか」を全部集めて、スコアの区分ごとに平均しています。</p>
+    <p style="margin:6px 0"><b>読み方の例</b>：下の表で「70以上」の行の20日・平均リターンが <b>${sg(top.h20.mean)}%</b> なら、「過去、個別銘柄スコアが70以上だった日に買うと、20営業日後に平均で${sg(top.h20.mean)}%（売買コスト後）だった」という意味です。「30未満」の行（${sg(bot.h20.mean)}%）や「全銘柄平均」（${sg(uni20)}%）と比べて、<b>スコアが高いほど成績が良ければ、そのスコアは役に立っている</b>と考えます。</p>
+    <p style="margin:6px 0"><b>ボタンの意味</b>：「対象」のボタンは、どのスコア・サインで区分するかの切り替えです。「保有日数」は、買ってから何営業日後に売るかです。</p>
+    <p class="note">要するに、このスコアに従っていたら過去は儲かったのか、を確かめる画面です。結果が良くなくても、それは「今のスコアの作りを見直す材料」であり、将来の売買を指示するものではありません。</p></div>
+
   <div class="card"><h2>結果の要点（数字から自動で作った文章）</h2>
     <p style="margin:6px 0">20営業日後の平均リターン（コスト後）：個別銘柄スコア <b>70以上は ${sg(top.h20.mean)}%</b>、<b>30未満は ${sg(bot.h20.mean)}%</b>、代表銘柄の全体平均は <b>${sg(uni20)}%</b>。<br>
     ${verdict}${icS ? `（日々の順位相関IC＝${sg(icS.mean, 3)}、t=${icS.t}。0より大きくt≥2なら「高スコアが有利」、0より小さくt≤-2なら「逆」の目安）` : ""}</p>
@@ -1190,12 +1214,117 @@ function drawBT() {
       legend: { orientation: "h", y: -0.18, font: { size: 11 } }, hovermode: "x unified" }, { displayModeBar: false, responsive: true });
 }
 
+// ---- ウォッチ：「今日注目する銘柄（日本）」を選ばれた後に追跡する ----
+const wState = { base: 1, h: 5, list: "all", activeOnly: false };
+const W_SHORT = { top: "総合上位", brk: "初動・ブレイク", ent: "タイミング良好" };
+function wCalc(day, p) {   // 選出後 k 営業日目の騰落率(%)。まだ来ていない日は null
+  const b = wState.base, H = D.watch.horizon, r = [], t = [];
+  for (let k = 0; k <= H; k++) {
+    const i = k + b, c = p.c, tp = day.topix;
+    r.push(c[i] != null && c[b] != null ? (c[i] / c[b] - 1) * 100 : null);
+    t.push(tp[i] != null && tp[b] != null ? (tp[i] / tp[b] - 1) * 100 : null);
+  }
+  return { r, t, u: (day.uni && day.uni[String(b)]) || [] };
+}
+const wLast = r => { for (let k = r.length - 1; k >= 0; k--) if (r[k] != null) return k; return -1; };
+const wMean = xs => xs.length ? xs.reduce((a, x) => a + x, 0) / xs.length : null;
+const wMed = xs => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+function wRows() {   // 表示対象の全ピック（計算済み）
+  const out = [];
+  for (const day of D.watch.days) for (const p of day.picks) {
+    if (wState.list !== "all" && !p.lists.includes(wState.list)) continue;
+    const x = wCalc(day, p), last = wLast(x.r);
+    out.push({ day, p, ...x, last });
+  }
+  return out;
+}
+function wStat(rows, h) {
+  const v = rows.filter(z => z.r[h] != null);
+  const ret = v.map(z => z.r[h]), tp = v.filter(z => z.t[h] != null).map(z => z.t[h]), un = v.filter(z => z.u[h] != null).map(z => z.u[h]);
+  const ex = v.filter(z => z.u[h] != null).map(z => z.r[h] - z.u[h]);
+  return { n: v.length, mean: wMean(ret), med: wMed(ret), win: ret.length ? ret.filter(x => x > 0).length / ret.length * 100 : null,
+    topix: wMean(tp), uni: wMean(un), ex: wMean(ex), exWin: ex.length ? ex.filter(x => x > 0).length / ex.length * 100 : null };
+}
+function renderWatch() {
+  const box = document.getElementById("watchBody"), W = D.watch;
+  if (!W || !W.days.length) {
+    box.innerHTML = `<div class="card"><h2>ウォッチ（注目銘柄の追跡）</h2><div class="note">まだ記録がありません。毎営業日のデータ更新時に「今日注目する銘柄（日本）」が自動で記録され、翌日以降に表示されます。</div></div>`;
+    return;
+  }
+  const rows = wRows(), H = W.horizon;
+  const all = rows;
+  const hs = [1, 3, 5, 10].filter(h => h <= H);
+  if (!hs.includes(wState.h)) wState.h = hs[hs.length - 1];
+  const btn = (grp, val, txt) => `<button class="mini per ${String(wState[grp]) === String(val) ? "on" : ""}" data-w="${grp}" data-v="${val}">${txt}</button>`;
+  const sub = [["全体", all], ...Object.keys(W.lists).map(k => [W.lists[k], all.filter(z => z.p.lists.includes(k))])];
+  const cell = (v, d = 2) => `<td class="num ${pcCls(v)}">${v === null ? ND : sg(v, d) + "%"}</td>`;
+  const tbl = sub.map(([nm, rs]) => {
+    const s = wStat(rs, wState.h);
+    return `<tr><td class="name">${esc(nm)}</td><td class="num">${s.n}</td>${cell(s.mean)}${cell(s.med)}<td class="num">${s.win === null ? ND : s.win.toFixed(0) + "%"}</td>${cell(s.topix)}${cell(s.uni)}${cell(s.ex)}<td class="num">${s.exWin === null ? ND : s.exWin.toFixed(0) + "%"}</td></tr>`;
+  }).join("");
+  const all5 = wStat(all, wState.h);
+  const verdict = all5.n < 20 ? `選出後${wState.h}営業日の結果が出ている件数は<b>${all5.n}件</b>と少なく、まだ傾向を語れる段階ではありません（目安：30件以上、できれば数十日分）。`
+    : all5.ex === null ? "" : all5.ex > 0.3 ? `これまでの選出は、選出後${wState.h}営業日で、代表銘柄の平均を平均 ${sg(all5.ex)}%上回っています（${all5.n}件）。` :
+      all5.ex < -0.3 ? `これまでの選出は、選出後${wState.h}営業日で、代表銘柄の平均を平均 ${sg(all5.ex)}%下回っています（${all5.n}件）。` :
+        `これまでの選出は、選出後${wState.h}営業日で、代表銘柄の平均と大きな差はありません（差 ${sg(all5.ex)}%、${all5.n}件）。`;
+  const shortNote = W.days.length < 20 ? `<br><b>記録がまだ${W.days.length}日分と短く、結果は偶然の影響が大きい</b>ため、数週間〜数か月ぶん溜まってから判断してください。` : "";
+  const shown = rows.filter(z => !wState.activeOnly || z.last < H).sort((a, b) => a.day.date < b.day.date ? 1 : a.day.date > b.day.date ? -1 : (b.r[b.last] ?? -999) - (a.r[a.last] ?? -999));
+  const tr = shown.map(z => {
+    const st = z.last < 0 ? (wState.base === 1 ? "翌営業日の終値待ち" : "—") : z.last >= H ? `終了（${H}営業日）` : `ウォッチ中（${z.last}営業日目）`;
+    const cur = z.last >= 0 ? z.r[z.last] : null, curU = z.last >= 0 && z.u[z.last] != null ? z.u[z.last] : null;
+    const col = k => `<td class="num ${pcCls(z.r[k])}">${z.r[k] == null ? "" : sg(z.r[k], 1) + "%"}</td>`;
+    return `<tr><td class="name">${esc(z.day.date.slice(5).replace("-", "/"))}${z.day.source === "replay" ? ' <small class="meta" title="過去のデータから後で再現した選出です">再現</small>' : ""}</td>
+      <td class="name"><a class="gostock" data-c="${z.p.code}" style="cursor:pointer;text-decoration:underline dotted">${esc(z.p.name)}</a><small>${z.p.code}</small></td>
+      <td class="name"><small class="meta">${z.p.lists.map(k => W_SHORT[k]).join("・")}</small></td><td class="num">${z.p.total ?? ""}</td>
+      ${hs.map(col).join("")}<td class="num ${pcCls(cur)}"><b>${cur === null ? "" : sg(cur, 1) + "%"}</b></td>
+      <td class="num ${pcCls(cur !== null && curU !== null ? cur - curU : null)}">${cur !== null && curU !== null ? sg(cur - curU, 1) + "%" : ""}</td>
+      <td class="name"><small>${st}</small></td></tr>`;
+  }).join("");
+  box.innerHTML = `
+  <div class="card"><h2>ウォッチ（注目銘柄の追跡）</h2>
+    <p class="note" style="margin:4px 0">市場分析の「今日注目する銘柄（日本）」に出た銘柄を、毎営業日の更新時に自動で記録し、その後 ${H} 営業日（約2週間）の値動きを追います。<b>実際の売買の記録ではなく、選出後の株価の動きを見るためのものです</b>（売買コスト・税は含みません）。</p>
+    <p style="margin:6px 0"><b>記録済み：${W.liveDays}日分</b>（毎日の更新時に自動記録）${W.replayDays ? `／<b>再現：${W.replayDays}日分</b>（過去のデータだけで後から作り直した選出。表では「再現」と表示。当時の画面と少し違う可能性があります）` : ""}　最初の記録日：${esc(W.firstDate)}</p>
+    <div class="ctrl"><span class="note">基準価格：</span>${btn("base", 1, "翌営業日の終値")}${btn("base", 0, "選出日の終値")}
+      <span class="note">　対象リスト：</span>${btn("list", "all", "すべて")}${Object.keys(W.lists).map(k => btn("list", k, W_SHORT[k])).join("")}</div>
+    <p class="note">「翌営業日の終値」＝選出された日の夕方に知って、翌日の終値で買った場合（検証画面と同じ前提で、実際に取れる条件に近い）。「選出日の終値」＝選出日の終値で買えた場合（その日の結果を見てから選んでいるため、やや有利に出ます）。</p></div>
+
+  <div class="card"><h2>選出後の成績（まとめ）</h2>
+    <div class="ctrl"><span class="note">選出後：</span>${hs.map(h => btn("h", h, h + "営業日")).join("")}</div>
+    <div class="scroll"><table><thead><tr><th class="name">区分</th><th>件数</th><th>平均騰落率</th><th>中央値</th><th>プラスだった割合</th><th>TOPIX<br><small>同期間</small></th><th>代表銘柄の平均<br><small>同期間</small></th><th>差<br><small>対代表平均</small></th><th>代表平均を上回った割合</th></tr></thead><tbody>${tbl}</tbody></table></div>
+    <p style="margin:6px 0">${verdict}${shortNote}</p>
+    <p class="note">「代表銘柄の平均」＝この分析の代表銘柄（約150銘柄）を等金額で持った場合の同期間の騰落率。選ばれた銘柄が、<b>地合いに関係なく</b>他より強かったかは、TOPIXではなく、この「代表銘柄の平均との差」で見ます。同じ銘柄が複数の日・複数のリストに入ると、それぞれ別に数えます。リストが重なる日は観測が重複するため、件数ほどの独立した証拠にはなりません。</p></div>
+
+  <div class="card"><h2>選出後の平均推移</h2><div id="wChart" style="height:320px"></div>
+    <p class="note">選出後の各日までの平均騰落率（％）。日数が進むほど、その日数に達した件数が減ります。</p></div>
+
+  <div class="card"><h2>選出した銘柄の一覧</h2>
+    <label class="note"><input type="checkbox" id="w_active" ${wState.activeOnly ? "checked" : ""}> ウォッチ中（${H}営業日に達していない）だけ表示</label>
+    <div class="scroll"><table><thead><tr><th class="name">選出日</th><th class="name">銘柄</th><th class="name">リスト</th><th>選出時<br>総合</th>${hs.map(h => `<th>${h}日後</th>`).join("")}<th>現在まで</th><th>差<br><small>対代表平均</small></th><th class="name">状態</th></tr></thead><tbody>${tr || `<tr><td colspan="${hs.length + 7}" class="note">該当なし</td></tr>`}</tbody></table></div>
+    <p class="note">騰落率は、基準価格（上の切り替え）からの値動き。「現在まで」は、最新の終値までの騰落率（最大${H}営業日）。銘柄名をタップすると個別銘柄分析に移ります。株価は終値ベースで、分割・併合は調整済みです。選出条件は市場分析画面の「今日注目する銘柄（日本）」の3つのリスト（総合評価の上位、上昇初動・ブレイクアウト候補、総合60点以上でタイミング良好）と同じです。</p></div>`;
+  box.querySelectorAll("button[data-w]").forEach(b => b.addEventListener("click", () => { wState[b.dataset.w] = b.dataset.w === "base" || b.dataset.w === "h" ? +b.dataset.v : b.dataset.v; renderWatch(); }));
+  const ck = document.getElementById("w_active"); if (ck) ck.addEventListener("change", () => { wState.activeOnly = ck.checked; renderWatch(); });
+  drawWatch(all);
+}
+function drawWatch(all) {
+  const el = document.getElementById("wChart"); if (!el || !document.getElementById("watch").classList.contains("on")) return;
+  if (typeof Plotly === "undefined") { setTimeout(() => drawWatch(all), 800); return; }
+  const H = D.watch.horizon, ks = [...Array(H + 1).keys()];
+  const avg = (rs, key) => ks.map(k => { const v = rs.filter(z => z.r[k] != null && (key === "r" || z[key][k] != null)).map(z => z[key][k]); return v.length ? wMean(v) : null; });
+  const COL = { all: "#1f4e79", top: "#2e86c1", brk: "#ca6f1e", ent: "#117a65" };
+  const tr = [{ x: ks, y: avg(all, "r"), name: "選出銘柄（全体）", mode: "lines+markers", line: { color: COL.all, width: 3 }, connectgaps: false }];
+  Object.keys(D.watch.lists).forEach(k => { const rs = all.filter(z => z.p.lists.includes(k)); if (rs.length) tr.push({ x: ks, y: avg(rs, "r"), name: W_SHORT[k], mode: "lines", line: { color: COL[k], width: 1.5 } }); });
+  tr.push({ x: ks, y: avg(all, "u"), name: "代表銘柄の平均", mode: "lines", line: { color: "#7f8c8d", width: 2, dash: "dash" } });
+  tr.push({ x: ks, y: avg(all, "t"), name: "TOPIX", mode: "lines", line: { color: "#c0392b", width: 1.5, dash: "dot" } });
+  Plotly.react(el, tr, { margin: { l: 44, r: 10, t: 10, b: 70 }, xaxis: { title: "選出後の営業日", dtick: 1, gridcolor: "#f0f0f0" }, yaxis: { title: "平均騰落率（%）", ticksuffix: "%", gridcolor: "#e5e7eb", zeroline: true },
+    legend: { orientation: "h", y: -0.3, font: { size: 11 } }, hovermode: "x unified" }, { displayModeBar: false, responsive: true });
+}
+
 // ---- 起動 ----
 if (!D) {
   document.querySelector("main").innerHTML = '<div class="card">データが入っていません。make_html.py で作成してください。</div>';
 } else {
   document.getElementById("meta").textContent = `更新 ${D.generated}（各行の日付は、その市場の最新取引日）`;
-  renderToday(); renderHistory(); renderDetailSelect(); renderMarket(); renderRank(); renderScreen(); renderStockShell(); renderPF(); renderBT();
+  renderToday(); renderHistory(); renderDetailSelect(); renderMarket(); renderRank(); renderScreen(); renderStockShell(); renderPF(); renderBT(); renderWatch();
   const Q = D.quality;
   if (Q) {
     document.getElementById("meta").textContent += `／データ最終日 ${Q.latestDate}`;
