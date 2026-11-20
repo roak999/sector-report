@@ -7,13 +7,13 @@ on:
   workflow_dispatch:          # 手動実行ボタン
 
 permissions:
-  contents: read
+  contents: write            # 「今日注目する銘柄」の履歴(history/picks.json)をリポジトリに保存するため
   pages: write
   id-token: write
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false  # 履歴の保存中に実行が打ち切られないようにする（後の実行は順番待ち）
 
 jobs:
   build:
@@ -25,6 +25,20 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: python make_html.py --out site/index.html
+      # 注目銘柄の履歴を保存する（変更があったときだけ）。失敗してもページの公開は続ける
+      - name: save pick history
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add history/picks.json
+          if git diff --cached --quiet; then
+            echo "履歴に変更なし"
+          else
+            git commit -m "chore: update pick history"
+            git pull --rebase
+            git push
+          fi
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
