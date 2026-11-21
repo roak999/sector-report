@@ -1231,11 +1231,13 @@ const wMean = xs => xs.length ? xs.reduce((a, x) => a + x, 0) / xs.length : null
 const wMed = xs => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 function wRows() {   // 表示対象の全ピック（計算済み）
   const out = [];
-  for (const day of D.watch.days) for (const p of day.picks) {
-    if (wState.list !== "all" && !p.lists.includes(wState.list)) continue;
+  const order = Object.keys(D.watch.lists);
+  for (const day of D.watch.days) day.picks.forEach((p, idx) => {
+    if (wState.list !== "all" && !p.lists.includes(wState.list)) return;
     const x = wCalc(day, p), last = wLast(x.r);
-    out.push({ day, p, ...x, last });
-  }
+    // 並び順：リストの順（複数に入る銘柄は、先のリストにまとめる）→ 記録時の順位
+    out.push({ day, p, ...x, last, ord: Math.min(...p.lists.map(k => order.indexOf(k))), idx });
+  });
   return out;
 }
 function wStat(rows, h) {
@@ -1268,7 +1270,7 @@ function renderWatch() {
       all5.ex < -0.3 ? `これまでの選出は、選出後${wState.h}営業日で、代表銘柄の平均を平均 ${sg(all5.ex)}%下回っています（${all5.n}件）。` :
         `これまでの選出は、選出後${wState.h}営業日で、代表銘柄の平均と大きな差はありません（差 ${sg(all5.ex)}%、${all5.n}件）。`;
   const shortNote = W.days.length < 20 ? `<br><b>記録がまだ${W.days.length}日分と短く、結果は偶然の影響が大きい</b>ため、数週間〜数か月ぶん溜まってから判断してください。` : "";
-  const shown = rows.filter(z => !wState.activeOnly || z.last < H).sort((a, b) => a.day.date < b.day.date ? 1 : a.day.date > b.day.date ? -1 : (b.r[b.last] ?? -999) - (a.r[a.last] ?? -999));
+  const shown = rows.filter(z => !wState.activeOnly || z.last < H).sort((a, b) => a.day.date < b.day.date ? 1 : a.day.date > b.day.date ? -1 : a.ord - b.ord || a.idx - b.idx);
   const tr = shown.map(z => {
     const st = z.last < 0 ? (wState.base === 1 ? "翌営業日の終値待ち" : "—") : z.last >= H ? `終了（${H}営業日）` : `ウォッチ中（${z.last}営業日目）`;
     const cur = z.last >= 0 ? z.r[z.last] : null, curU = z.last >= 0 && z.u[z.last] != null ? z.u[z.last] : null;
